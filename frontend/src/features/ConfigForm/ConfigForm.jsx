@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useDealContext } from '../../context/DealContext'
 import ErrorMessage from '../../components/ErrorMessage'
 import GenerationProgress from '../../components/GenerationProgress'
+import BulkGeneratePanel from './BulkGeneratePanel'
 
 const inputStyle = {
   width: '100%',
@@ -37,6 +38,7 @@ const Field = ({ label, children }) => (
 const ConfigForm = () => {
   const navigate = useNavigate()
   const { generateDealStream, cancelGeneration, loading, error, setError, generationProgress, generationStep } = useDealContext()
+  const [mode, setMode] = useState('single') // 'single' | 'bulk'
 
   const [formData, setFormData] = useState({
     company_name: '',
@@ -82,16 +84,38 @@ const ConfigForm = () => {
   const focusStyle = (e) => e.target.style.borderColor = 'var(--teal-border)'
   const blurStyle = (e) => e.target.style.borderColor = 'var(--rule)'
 
+  const tabStyle = (active) => ({
+    padding: '7px 18px',
+    background: active ? 'var(--teal)' : 'var(--surface)',
+    color: active ? '#fff' : 'var(--text-muted)',
+    border: '1px solid',
+    borderColor: active ? 'var(--teal)' : 'var(--rule)',
+    borderRadius: '6px',
+    fontFamily: 'inherit',
+    fontSize: '13px',
+    fontWeight: '500',
+    cursor: 'pointer',
+  })
+
   return (
     <div style={{ minHeight: '100%', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '60px 48px' }}>
       <div style={{ width: '100%', maxWidth: '760px' }}>
         <h1 style={{ fontSize: '28px', fontWeight: '700', color: 'var(--text)', marginBottom: '6px', letterSpacing: '-0.5px' }}>
           Generate Deal
         </h1>
-        <p style={{ fontSize: '14px', color: 'var(--text-muted)', marginBottom: '36px' }}>
+        <p style={{ fontSize: '14px', color: 'var(--text-muted)', marginBottom: '24px' }}>
           Configure parameters for a synthetic B2B sales deal.
         </p>
 
+        {/* Mode tabs */}
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '32px' }}>
+          <button style={tabStyle(mode === 'single')} onClick={() => setMode('single')}>Single Deal</button>
+          <button style={tabStyle(mode === 'bulk')} onClick={() => setMode('bulk')}>Bulk Random</button>
+        </div>
+
+        {mode === 'bulk' && <BulkGeneratePanel />}
+
+        {mode === 'single' && <>
         {error && <div style={{ marginBottom: '24px' }}><ErrorMessage message={error} /></div>}
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -230,6 +254,7 @@ const ConfigForm = () => {
             ) : 'Generate Deal'}
           </button>
         </form>
+        </>}
       </div>
     </div>
   )

@@ -272,3 +272,7 @@ class DealResponse(BaseModel):
 class SuccessResponse(BaseModel):
     """Generic success response."""
     success: bool
+
+class BulkGenerateRequest(BaseModel):
+    """POST /api/bulk-generate-stream request body."""
+    count: int = Field(..., ge=1, le=20, description="Number of random deals to generate")

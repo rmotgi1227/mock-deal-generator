@@ -20,9 +20,11 @@ from models import (
     DealResponse,
     SuccessResponse,
     DealContent,
+    BulkGenerateRequest,
 )
-from generator import generate_complete_deal
+from generator import generate_complete_deal, _OutputTokenLimiter, _model_output_tpm
 from file_handler import write_deal, read_deal, list_deal_files, delete_deal, find_deal_file
+from random_config import generate_random_config
 
 # Load environment variables from .env
 load_dotenv()
@@ -205,6 +207,78 @@ async def delete_deal_endpoint(deal_id: str):
     except Exception as e:
         logger.error(f"Failed to delete deal {deal_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to delete deal: {str(e)}")
+
+@app.post("/api/bulk-generate-stream")
+async def bulk_generate_stream(request: BulkGenerateRequest):
+    """
+    POST /api/bulk-generate-stream
+    Generate N random deals with a shared rate limiter and bounded concurrency.
+    SSE events:
+      {type: "deal_start",    deal_number, total}
+      {type: "deal_complete", deal_number, total, completed, deal_id, filename}
+      {type: "deal_error",    deal_number, total, message}
+      {type: "bulk_complete", total, completed, failed}
+    """
+    count = request.count
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def run_bulk():
+        shared_limiter = _OutputTokenLimiter(_model_output_tpm())
+        sem = asyncio.Semaphore(2)
+        completed = [0]
+        failed = [0]
+
+        async def generate_one(deal_number: int):
+            config = generate_random_config()
+            await queue.put({"type": "deal_start", "deal_number": deal_number, "total": count})
+            try:
+                async with sem:
+                    result = await generate_complete_deal(config, external_limiter=shared_limiter)
+                filename = await write_deal(
+                    result['deal_id'], result['metadata'], result['events']
+                )
+                result['metadata']['filename'] = filename
+                completed[0] += 1
+                await queue.put({
+                    "type": "deal_complete",
+                    "deal_number": deal_number,
+                    "total": count,
+                    "completed": completed[0],
+                    "deal_id": result['deal_id'],
+                    "filename": filename,
+                })
+            except Exception as e:
+                failed[0] += 1
+                logger.error(f"Bulk deal {deal_number} failed: {e}")
+                await queue.put({
+                    "type": "deal_error",
+                    "deal_number": deal_number,
+                    "total": count,
+                    "message": str(e),
+                })
+
+        await asyncio.gather(*[generate_one(i + 1) for i in range(count)])
+        await queue.put({"type": "bulk_complete", "total": count, "completed": completed[0], "failed": failed[0]})
+
+    asyncio.create_task(run_bulk())
+
+    async def event_stream():
+        while True:
+            event = await queue.get()
+            yield f"data: {json.dumps(event)}\n\n"
+            if event["type"] == "bulk_complete":
+                break
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+    )
+
 
 @app.get("/")
 async def root():

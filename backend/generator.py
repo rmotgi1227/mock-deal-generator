@@ -382,17 +382,19 @@ async def stage_3_generate_all_content(
     events: List[Dict[str, Any]],
     stage1: Dict[str, Any],
     config: Dict[str, Any],
-    progress_callback: Optional[ProgressCallback] = None
+    progress_callback: Optional[ProgressCallback] = None,
+    external_limiter: Optional[_OutputTokenLimiter] = None,
 ) -> List[Dict[str, Any]]:
     """
     Stage 3: Generate content for all events with bounded concurrency.
     Builds a shared cached system block with deal context to amortize
     token cost across all event calls. An output-token limiter enforces
     the Tier-1 per-minute budget to avoid 429s.
+    Pass external_limiter to share a single budget across concurrent deals.
     """
     system_blocks = build_cached_system_blocks(stage1, config)
     semaphore = asyncio.Semaphore(2)
-    limiter = _OutputTokenLimiter(_model_output_tpm())
+    limiter = external_limiter or _OutputTokenLimiter(_model_output_tpm())
     total = len(events)
     completed_count = [0]
     results = [None] * total
@@ -439,7 +441,8 @@ async def stage_3_generate_all_content(
 
 async def generate_complete_deal(
     config: Dict[str, Any],
-    progress_callback: Optional[ProgressCallback] = None
+    progress_callback: Optional[ProgressCallback] = None,
+    external_limiter: Optional[_OutputTokenLimiter] = None,
 ) -> Dict[str, Any]:
     """
     Run full 3-stage pipeline and return complete deal object.
@@ -464,7 +467,7 @@ async def generate_complete_deal(
     if progress_callback:
         await progress_callback("stage3_start", f"Generating content for {len(events_scaffold)} events...", 35)
 
-    events = await stage_3_generate_all_content(events_scaffold, stage1, config, progress_callback)
+    events = await stage_3_generate_all_content(events_scaffold, stage1, config, progress_callback, external_limiter)
 
     if progress_callback:
         await progress_callback("saving", "Saving deal...", 96)

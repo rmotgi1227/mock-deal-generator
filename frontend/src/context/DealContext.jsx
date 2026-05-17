@@ -14,6 +14,8 @@ export const DealProvider = ({ children }) => {
   const [detailError, setDetailError] = useState(null)
   const [generationProgress, setGenerationProgress] = useState(0)
   const [generationStep, setGenerationStep] = useState('')
+  const [bulkProgress, setBulkProgress] = useState({ completed: 0, failed: 0, total: 0 })
+  const [bulkLoading, setBulkLoading] = useState(false)
   const abortRef = useRef(null)
 
   // Generate deal with real-time SSE progress streaming
@@ -122,6 +124,65 @@ export const DealProvider = ({ children }) => {
     abortRef.current?.abort()
   }, [])
 
+  const bulkGenerateStream = useCallback(async (count) => {
+    setBulkLoading(true)
+    setBulkProgress({ completed: 0, failed: 0, total: count })
+
+    const controller = new AbortController()
+    abortRef.current = controller
+
+    try {
+      const response = await fetch(`${BASE_URL}/api/bulk-generate-stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ count }),
+        signal: controller.signal,
+      })
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}))
+        throw new Error(errData.detail || `HTTP ${response.status}`)
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop()
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const raw = line.slice(6).trim()
+          if (!raw) continue
+
+          let event
+          try { event = JSON.parse(raw) } catch { continue }
+
+          if (event.type === 'deal_complete') {
+            setBulkProgress(prev => ({ ...prev, completed: event.completed }))
+          } else if (event.type === 'deal_error') {
+            setBulkProgress(prev => ({ ...prev, failed: prev.failed + 1 }))
+          } else if (event.type === 'bulk_complete') {
+            setBulkProgress({ completed: event.completed, failed: event.failed, total: event.total })
+            setBulkLoading(false)
+            await fetchDealsList()
+            return event
+          }
+        }
+      }
+    } catch (err) {
+      if (err.name === 'AbortError') return
+      setBulkLoading(false)
+      throw err
+    }
+  }, [fetchDealsList])
+
   // Delete deal by ID
   const deleteDeal = useCallback(async (dealId) => {
     const previousList = dealsList
@@ -138,6 +199,9 @@ export const DealProvider = ({ children }) => {
   }, [dealsList, fetchDealsList])
 
   const value = {
+    bulkProgress,
+    bulkLoading,
+    bulkGenerateStream,
     currentDeal,
     setCurrentDeal,
     dealsList,
