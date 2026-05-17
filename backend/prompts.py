@@ -3,7 +3,7 @@ Claude prompt templates for 3-stage deal generation pipeline.
 All prompts are string constants that get formatted with variables.
 """
 
-SYSTEM_PROMPT = """You are a B2B sales data generator. You create realistic, specific, human-sounding synthetic CRM data for demo environments. Always respond with valid JSON only — no markdown, no code fences, no explanations. Company names must be fictional but plausible. People must have realistic full names. All data must be internally consistent."""
+SYSTEM_PROMPT = """You are a B2B sales data generator. You create realistic, specific, human-sounding synthetic CRM data for demo environments. Always respond with valid JSON only — no markdown, no code fences, no explanations. Company names must be fictional but plausible. People must have realistic full names. All data must be internally consistent. CRITICAL: Generate only valid JSON. Inside string values: use alphanumeric characters, spaces, hyphens, apostrophes, periods, and commas ONLY. Do NOT use quotes, ampersands, parentheses, slashes, newlines, or other special characters. If you must include a double quote in a string value, use \\" to escape it. Never include raw newlines in strings."""
 
 # ============= STAGE 1: Foundation =============
 
@@ -77,6 +77,7 @@ Rules:
 - sentiment_arc must start at {starting_sentiment} and end at {ending_sentiment} with natural intermediate progression.
 - stage_progression dates must fall within {deal_start_date} to {deal_end_date}.
 - stakeholders must include exactly {num_stakeholders} people. Assign exactly one as is_champion: true only if champion_entry is not "none".
+- For all text fields (name, title, archetype, text): Use ONLY alphanumeric characters, spaces, hyphens, apostrophes, periods, and commas. NO quotes (straight or curly), NO ampersands, NO parentheses, NO slashes.
 - If complexity is "simple": 1-2 objections, all resolved. Mostly supporter/neutral stakeholders.
 - If complexity is "normal": 3-4 objections, most resolved. At least one skeptic.
 - If complexity is "messy": 5+ objections, some unresolved. At least one blocker. Include budget, security, and procurement objections.

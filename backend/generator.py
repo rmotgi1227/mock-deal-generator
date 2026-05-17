@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 from anthropic import AsyncAnthropic
 import os
+from dotenv import load_dotenv
 from prompts import (
     SYSTEM_PROMPT,
     STAGE_1_PROMPT_TEMPLATE,
@@ -20,6 +21,9 @@ from prompts import (
     STAGE_3_EMAIL_PROMPT_TEMPLATE,
     STAGE_3_CRM_NOTE_PROMPT_TEMPLATE,
 )
+
+# Load environment variables
+load_dotenv()
 
 # Initialize async Anthropic client
 client = AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
@@ -61,9 +65,19 @@ async def call_claude_with_retry(prompt: str, max_retries: int = 3) -> str:
                 response = response[:-3]
             response = response.strip()
 
-            # Validate JSON
-            json.loads(response)
-            return response
+            # Validate JSON - try to parse and log errors
+            try:
+                json.loads(response)
+                return response
+            except json.JSONDecodeError as parse_err:
+                # Try common fixes: replace smart quotes
+                fixed = response.replace('"', '"').replace('"', '"').replace(''', "'").replace(''', "'")
+                try:
+                    json.loads(fixed)
+                    return fixed
+                except:
+                    pass  # Will retry or fail below
+                raise parse_err
         except json.JSONDecodeError as e:
             if attempt == max_retries - 1:
                 raise Exception(f"Claude response is not valid JSON after {max_retries} retries: {str(e)}")
