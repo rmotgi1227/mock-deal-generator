@@ -45,7 +45,7 @@ async def call_claude_with_retry(prompt: str, max_retries: int = 1) -> str:
     """
     message = await client.messages.create(
         model=MODEL,
-        max_tokens=8192,
+        max_tokens=16000,
         system=SYSTEM_PROMPT,
         messages=[
             {"role": "user", "content": prompt}
