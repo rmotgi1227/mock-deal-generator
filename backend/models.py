@@ -1,6 +1,5 @@
 from pydantic import BaseModel, Field
 from typing import Optional, List
-from datetime import datetime
 from enum import Enum
 
 # ============= Enums =============
@@ -11,6 +10,19 @@ class SentimentEnum(str, Enum):
     NEUTRAL = "neutral"
     CONCERNED = "concerned"
     NEGATIVE = "negative"
+
+    @classmethod
+    def _missing_(cls, value):
+        if isinstance(value, str):
+            normalized = value.lower()
+            for member in cls:
+                if member.value == normalized:
+                    return member
+            # Map fuzzy values (e.g. "slightly positive") to nearest valid member
+            for member in cls:
+                if member.value in normalized:
+                    return member
+        return None
 
 class DealOutcomeEnum(str, Enum):
     """Deal outcome: closed_won or closed_lost."""
@@ -135,7 +147,6 @@ class DealConfig(BaseModel):
     sales_cycle_length_days: int
     starting_sentiment: SentimentEnum
     ending_sentiment: SentimentEnum
-    deal_outcome: DealOutcomeEnum
     champion_entry: ChampionEntryEnum
     main_objection: str
     buyer_urgency: BuyerUrgencyEnum

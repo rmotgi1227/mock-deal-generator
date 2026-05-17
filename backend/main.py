@@ -5,6 +5,9 @@ FastAPI application for Ycrest Mock Deal Generator.
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+import asyncio
+import json
 import logging
 import os
 from dotenv import load_dotenv
@@ -31,10 +34,10 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Add CORS middleware to allow frontend at http://localhost:5173
+# Add CORS middleware to allow frontend at http://localhost:5173 and 5174
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["http://localhost:5173", "http://localhost:5174"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -42,6 +45,64 @@ app.add_middleware(
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+@app.post("/api/generate-stream")
+async def generate_deal_stream(request: GenerateRequest):
+    """
+    POST /api/generate-stream
+    Generate a deal with Server-Sent Events progress updates.
+    Emits: {type: "progress", step, message, progress} during generation
+           {type: "complete", deal_id, filename, deal} on success
+           {type: "error", message} on failure
+    """
+    config = request.dict()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def run_generation():
+        try:
+            async def progress_callback(step: str, message: str, progress: int):
+                await queue.put({"type": "progress", "step": step, "message": message, "progress": progress})
+
+            deal_result = await generate_complete_deal(config, progress_callback)
+
+            filename = await write_deal(
+                deal_result['deal_id'],
+                deal_result['metadata'],
+                deal_result['events']
+            )
+            deal_result['metadata']['filename'] = filename
+
+            await queue.put({
+                "type": "complete",
+                "deal_id": deal_result['deal_id'],
+                "filename": filename,
+                "deal": {
+                    "metadata": deal_result['metadata'],
+                    "events": deal_result['events']
+                }
+            })
+        except Exception as e:
+            logger.error(f"Stream generation failed: {str(e)}")
+            await queue.put({"type": "error", "message": str(e)})
+
+    asyncio.create_task(run_generation())
+
+    async def event_stream():
+        while True:
+            event = await queue.get()
+            yield f"data: {json.dumps(event)}\n\n"
+            if event["type"] in ("complete", "error"):
+                break
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+    )
 
 @app.post("/api/generate", response_model=GenerateResponse)
 async def generate_deal(request: GenerateRequest):

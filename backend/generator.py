@@ -2,14 +2,14 @@
 Three-stage deal generation pipeline.
 Stage 1: Foundation (company, stakeholders, sentiment arc)
 Stage 2: Timeline scaffold (event ordering with metadata)
-Stage 3: Content generation (parallel event content fill-in)
+Stage 3: Content generation (batched with concurrency limit)
 """
 
 import json
 import asyncio
 import uuid
-from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Dict, List, Any, Optional, Callable, Awaitable
 from anthropic import AsyncAnthropic
 import os
 from dotenv import load_dotenv
@@ -22,39 +22,26 @@ from prompts import (
     STAGE_3_CRM_NOTE_PROMPT_TEMPLATE,
 )
 
-# Load environment variables
 load_dotenv()
 
-# Initialize async Anthropic client
 client = AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-MODEL = os.environ.get("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
+MODEL = os.environ.get("CLAUDE_MODEL", "claude-haiku-4-5")
 
-async def call_claude_with_retry(prompt: str, max_retries: int = 1) -> str:
-    """
-    Call Claude API. Strips markdown backticks if present.
-    NO RETRIES - fails on first error for debugging.
+# Max tokens per event type — tuned to actual output needs
+MAX_TOKENS_BY_TYPE = {
+    "stage1": 4096,
+    "stage2": 10000,
+    "call": 2500,
+    "email": 1024,
+    "crm_note": 400,
+}
 
-    Args:
-        prompt: Full prompt (system + user combined)
+ProgressCallback = Callable[[str, str, int], Awaitable[None]]
 
-    Returns:
-        Valid JSON string response
 
-    Raises:
-        Exception: On any failure
-    """
-    message = await client.messages.create(
-        model=MODEL,
-        max_tokens=10000,
-        system=SYSTEM_PROMPT,
-        messages=[
-            {"role": "user", "content": prompt}
-        ]
-    )
-    response = message.content[0].text
-
-    # Strip markdown backticks if present
-    response = response.strip()
+def _parse_claude_response(text: str) -> str:
+    """Strip markdown fences, validate JSON, return clean JSON string."""
+    response = text.strip()
     if response.startswith("```json"):
         response = response[7:]
     if response.startswith("```"):
@@ -63,34 +50,89 @@ async def call_claude_with_retry(prompt: str, max_retries: int = 1) -> str:
         response = response[:-3]
     response = response.strip()
 
-    # Validate JSON - try to parse
     try:
         json.loads(response)
         return response
     except json.JSONDecodeError as parse_err:
-        # Try common fixes: replace smart quotes
-        fixed = response.replace('"', '"').replace('"', '"').replace(''', "'").replace(''', "'")
+        # Claude sometimes uses backslash-newline as a line continuation inside JSON strings,
+        # which is an invalid escape sequence. Replace with a space.
+        fixed = response.replace("\\\n", " ")
+        fixed = fixed.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
         try:
             json.loads(fixed)
             return fixed
-        except:
-            # Log full response for debugging
+        except Exception:
             with open("/tmp/claude_response.json", "w") as f:
                 f.write(response)
             raise Exception(f"Claude response is not valid JSON: {str(parse_err)}\n\nFull response saved to /tmp/claude_response.json")
 
+
+async def _call_with_retry(create_kwargs: dict, max_retries: int = 4) -> str:
+    """
+    Call Claude API with exponential backoff on 429 rate limit errors.
+    Waits respect the retry-after header when present.
+    """
+    from anthropic import RateLimitError
+    delay = 15
+    for attempt in range(max_retries):
+        try:
+            message = await client.messages.create(**create_kwargs)
+            return _parse_claude_response(message.content[0].text)
+        except RateLimitError as e:
+            if attempt == max_retries - 1:
+                raise
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 60)
+
+
+async def call_claude(prompt: str, max_tokens: int) -> str:
+    """Call Claude with plain system prompt. Returns valid JSON string."""
+    return await _call_with_retry({
+        "model": MODEL,
+        "max_tokens": max_tokens,
+        "system": SYSTEM_PROMPT,
+        "messages": [{"role": "user", "content": prompt}],
+    })
+
+
+async def call_claude_cached(system_blocks: list, prompt: str, max_tokens: int) -> str:
+    """
+    Call Claude with cached system blocks. Use for stage-3 calls where deal
+    context is stable across many events in a single deal generation.
+    """
+    return await _call_with_retry({
+        "model": MODEL,
+        "max_tokens": max_tokens,
+        "system": system_blocks,
+        "messages": [{"role": "user", "content": prompt}],
+    })
+
+
+def build_cached_system_blocks(stage1: Dict[str, Any], config: Dict[str, Any]) -> list:
+    """
+    Build system content blocks with deal context marked for caching.
+    The combined size of SYSTEM_PROMPT + deal context needs to exceed
+    the model's minimum cacheable prefix (4096 tokens for Haiku 4.5).
+    Cache hits amortize cost across all stage-3 event calls in a deal.
+    """
+    deal_context = (
+        f"Deal context for this generation run:\n"
+        f"Company: {json.dumps(stage1['company'])}\n"
+        f"Sales Rep: {json.dumps(stage1['sales_rep'])}\n"
+        f"Stakeholders: {json.dumps(stage1['stakeholders'])}\n"
+        f"Sentiment Arc: {json.dumps(stage1['sentiment_arc'])}\n"
+        f"Objections: {json.dumps(stage1['objections'])}\n"
+        f"Config: industry={config['industry']}, deal_size={config['deal_size']}, "
+        f"complexity={config['complexity']}, main_objection={config['main_objection']}, "
+        f"deal_outcome={config['deal_outcome']}"
+    )
+    return [
+        {"type": "text", "text": SYSTEM_PROMPT},
+        {"type": "text", "text": deal_context, "cache_control": {"type": "ephemeral"}},
+    ]
+
+
 async def stage_1_generate_foundation(config: Dict[str, Any], deal_start_date: str, deal_end_date: str) -> Dict[str, Any]:
-    """
-    Stage 1: Generate deal foundation (company, stakeholders, sentiment arc, objections).
-
-    Args:
-        config: Deal configuration from POST request
-        deal_start_date: YYYY-MM-DD
-        deal_end_date: YYYY-MM-DD
-
-    Returns:
-        Dict with keys: company, sales_rep, stakeholders, sentiment_arc, stage_progression, objections
-    """
     company_name_line = (
         f"Company Name: {config['company_name']}"
         if config['company_name']
@@ -114,8 +156,9 @@ async def stage_1_generate_foundation(config: Dict[str, Any], deal_start_date: s
         deal_end_date=deal_end_date,
     )
 
-    response = await call_claude_with_retry(prompt)
+    response = await call_claude(prompt, MAX_TOKENS_BY_TYPE["stage1"])
     return json.loads(response)
+
 
 async def stage_2_generate_timeline_scaffold(
     stage1_output: Dict[str, Any],
@@ -123,18 +166,6 @@ async def stage_2_generate_timeline_scaffold(
     deal_start_date: str,
     deal_end_date: str
 ) -> List[Dict[str, Any]]:
-    """
-    Stage 2: Generate timeline scaffold (events with metadata, no content).
-
-    Args:
-        stage1_output: Result from Stage 1
-        config: Deal configuration
-        deal_start_date: YYYY-MM-DD
-        deal_end_date: YYYY-MM-DD
-
-    Returns:
-        List of event scaffold dicts
-    """
     prompt = STAGE_2_PROMPT_TEMPLATE.format(
         stage1_json=json.dumps(stage1_output),
         deal_start_date=deal_start_date,
@@ -146,25 +177,23 @@ async def stage_2_generate_timeline_scaffold(
         main_objection=config['main_objection'],
     )
 
-    response = await call_claude_with_retry(prompt)
+    response = await call_claude(prompt, MAX_TOKENS_BY_TYPE["stage2"])
     return json.loads(response)
 
-def build_prior_events_summary(events: List[Dict[str, Any]], current_event_index: int) -> str:
+
+def build_prior_events_summary(events: List[Dict[str, Any]], current_event_index: int, max_prior: int = 7) -> str:
     """
-    Build a text summary of all prior events for context in Stage 3 prompts.
-
-    Args:
-        events: All event scaffolds
-        current_event_index: Index of current event
-
-    Returns:
-        Formatted string of prior events
+    Summarize the most recent prior events. Capped to avoid O(n²) token growth
+    as deal timelines grow — later events no longer pay for the entire history.
     """
     prior = events[:current_event_index]
     if not prior:
         return ""
 
-    lines = ["Prior interactions (oldest first):"]
+    # Keep only the most recent max_prior events to control token growth
+    prior = prior[-max_prior:]
+
+    lines = [f"Recent prior interactions (last {len(prior)}, oldest first):"]
     for event in prior:
         event_type = event['record_type']
         date = event['date']
@@ -173,44 +202,40 @@ def build_prior_events_summary(events: List[Dict[str, Any]], current_event_index
             label = event.get('title', 'Call')
         elif event_type == 'email':
             label = event.get('subject', 'Email')
-        else:  # crm_note
+        else:
             label = event.get('note_preview', 'CRM Note')
 
         lines.append(f"- [{date}] {event_type}: {label}")
 
     return "\n".join(lines)
 
+
 def get_all_stakeholders_summary(stage1: Dict[str, Any]) -> str:
-    """Format all stakeholders for Stage 3 context."""
     lines = []
     for sh in stage1['stakeholders']:
         lines.append(f"- {sh['name']} ({sh['title']}): {sh['archetype']}, support={sh['support_level']}")
     return "\n".join(lines)
 
+
 def get_champion_context(stage1: Dict[str, Any], champion_entered: bool, current_timestamp: str) -> str:
-    """Get champion context string for Stage 3 prompts."""
     if not any(sh.get('is_champion') for sh in stage1['stakeholders']):
         return "No champion in this deal."
 
     if not champion_entered:
         return "Champion has not yet emerged."
 
-    # Find champion
-    champion = next((sh for sh in stage1['stakeholders'] if sh.get('is_champion')), None)
-    if champion:
-        return f"Champion: {champion['name']} ({champion['title']}) is actively supporting the deal internally."
+    champion = next(sh for sh in stage1['stakeholders'] if sh.get('is_champion'))
+    return f"Champion: {champion['name']} ({champion['title']}) is actively supporting the deal internally."
 
-    return "Champion has not yet emerged."
 
 async def stage_3_generate_call_content(
     event: Dict[str, Any],
     stage1: Dict[str, Any],
     config: Dict[str, Any],
     prior_summary: str,
-    champion_entered: bool
+    champion_entered: bool,
+    system_blocks: list,
 ) -> Dict[str, Any]:
-    """Generate full content for a call event."""
-
     participants_detail = "\n".join([
         f"- {p['name']} ({p['role']})"
         for p in event.get('participants', [])
@@ -236,38 +261,25 @@ async def stage_3_generate_call_content(
         prior_events_summary=prior_summary,
     )
 
-    response = await call_claude_with_retry(prompt)
+    response = await call_claude_cached(system_blocks, prompt, MAX_TOKENS_BY_TYPE["call"])
     content = json.loads(response)
-
-    # Merge content with scaffold
     event.update(content)
     return event
+
 
 async def stage_3_generate_email_content(
     event: Dict[str, Any],
     stage1: Dict[str, Any],
     config: Dict[str, Any],
     prior_summary: str,
-    all_events: List[Dict[str, Any]]
+    all_events: List[Dict[str, Any]],
+    system_blocks: list,
 ) -> Dict[str, Any]:
-    """Generate full content for an email event."""
-
-    # Build reply context
     reply_context = ""
     if event.get('reply_to_id'):
-        # Find parent email
         parent = next((e for e in all_events if e.get('id') == event['reply_to_id']), None)
         if parent:
             reply_context = f"""This email is a direct reply to:
-Subject: {parent.get('subject', '')}
-From: {parent.get('sender', {}).get('name', '')}
-
-{parent.get('body', '')}"""
-    elif event.get('is_forward'):
-        # Find forwarded email
-        parent = next((e for e in all_events if e.get('id') == event['reply_to_id']), None)
-        if parent:
-            reply_context = f"""This email is being forwarded. Original:
 Subject: {parent.get('subject', '')}
 From: {parent.get('sender', {}).get('name', '')}
 
@@ -285,21 +297,19 @@ From: {parent.get('sender', {}).get('name', '')}
         prior_events_summary=prior_summary,
     )
 
-    response = await call_claude_with_retry(prompt)
+    response = await call_claude_cached(system_blocks, prompt, MAX_TOKENS_BY_TYPE["email"])
     content = json.loads(response)
-
-    # Merge content with scaffold
     event.update(content)
     return event
+
 
 async def stage_3_generate_crm_note_content(
     event: Dict[str, Any],
     stage1: Dict[str, Any],
     config: Dict[str, Any],
-    prior_summary: str
+    prior_summary: str,
+    system_blocks: list,
 ) -> Dict[str, Any]:
-    """Generate full content for a CRM note event."""
-
     prompt = STAGE_3_CRM_NOTE_PROMPT_TEMPLATE.format(
         company_name=stage1['company']['name'],
         sales_rep_name=stage1['sales_rep']['name'],
@@ -308,90 +318,108 @@ async def stage_3_generate_crm_note_content(
         note_preview=event.get('note_preview', ''),
     )
 
-    response = await call_claude_with_retry(prompt)
+    response = await call_claude_cached(system_blocks, prompt, MAX_TOKENS_BY_TYPE["crm_note"])
     content = json.loads(response)
-
-    # Merge content with scaffold
     event.update(content)
     return event
+
 
 async def stage_3_generate_all_content(
     events: List[Dict[str, Any]],
     stage1: Dict[str, Any],
-    config: Dict[str, Any]
+    config: Dict[str, Any],
+    progress_callback: Optional[ProgressCallback] = None
 ) -> List[Dict[str, Any]]:
     """
-    Stage 3: Generate content for all events in parallel via asyncio.gather().
-
-    Args:
-        events: Event scaffolds from Stage 2
-        stage1: Foundation output from Stage 1
-        config: Deal configuration
-
-    Returns:
-        List of fully-populated event objects
+    Stage 3: Generate content for all events with bounded concurrency.
+    Builds a shared cached system block with deal context to amortize
+    token cost across all event calls. Concurrency raised to 5 — Haiku
+    is fast enough that the rate-limit risk is low.
     """
-    tasks = []
+    system_blocks = build_cached_system_blocks(stage1, config)
+    semaphore = asyncio.Semaphore(2)
+    total = len(events)
+    completed_count = [0]
+    results = [None] * total
 
-    for index, event in enumerate(events):
+    async def generate_one(index: int, event: Dict[str, Any]):
         prior_summary = build_prior_events_summary(events, index)
-
-        # Check if champion has entered by this point
         champion_entered = any(
             e.get('note_preview', '').find('Champion') >= 0
             for e in events[:index]
         )
 
-        if event['record_type'] == 'call':
-            task = stage_3_generate_call_content(event, stage1, config, prior_summary, champion_entered)
-        elif event['record_type'] == 'email':
-            task = stage_3_generate_email_content(event, stage1, config, prior_summary, events)
-        elif event['record_type'] == 'crm_note':
-            task = stage_3_generate_crm_note_content(event, stage1, config, prior_summary)
-        else:
-            continue
+        async with semaphore:
+            record_type = event['record_type']
+            if record_type == 'call':
+                result = await stage_3_generate_call_content(event, stage1, config, prior_summary, champion_entered, system_blocks)
+            elif record_type == 'email':
+                result = await stage_3_generate_email_content(event, stage1, config, prior_summary, events, system_blocks)
+            elif record_type == 'crm_note':
+                result = await stage_3_generate_crm_note_content(event, stage1, config, prior_summary, system_blocks)
+            else:
+                result = event
 
-        tasks.append(task)
+            results[index] = result
+            completed_count[0] += 1
 
-    # Run all content generation in parallel
-    results = await asyncio.gather(*tasks)
+            if progress_callback:
+                pct = 40 + int((completed_count[0] / total) * 55)
+                label = {
+                    'call': f"call ({event.get('title', 'untitled')})",
+                    'email': f"email ({event.get('subject', '')})",
+                    'crm_note': 'CRM note',
+                }.get(record_type, record_type)
+                await progress_callback(
+                    f"stage3_{completed_count[0]}",
+                    f"Generating {label} — {completed_count[0]}/{total}",
+                    pct
+                )
+
+    tasks = [generate_one(i, event) for i, event in enumerate(events)]
+    await asyncio.gather(*tasks)
 
     return results
 
-async def generate_complete_deal(config: Dict[str, Any]) -> Dict[str, Any]:
+
+async def generate_complete_deal(
+    config: Dict[str, Any],
+    progress_callback: Optional[ProgressCallback] = None
+) -> Dict[str, Any]:
     """
     Run full 3-stage pipeline and return complete deal object.
-
-    Args:
-        config: Deal configuration from POST request
-
-    Returns:
-        Dict with: deal_id, metadata, events
+    Optional progress_callback(step, message, pct) called at each stage.
     """
-    # Calculate dates
-    deal_end_date = datetime.utcnow().date()
+    deal_end_date = datetime.now(timezone.utc).date()
     deal_start_date = deal_end_date - timedelta(days=config['sales_cycle_length_days'])
-
     deal_id = str(uuid.uuid4())
 
-    # Stage 1: Foundation
+    if progress_callback:
+        await progress_callback("stage1", "Generating company profile and stakeholders...", 5)
+
     stage1 = await stage_1_generate_foundation(config, str(deal_start_date), str(deal_end_date))
 
-    # Stage 2: Timeline Scaffold
+    if progress_callback:
+        await progress_callback("stage2", "Building deal timeline scaffold...", 25)
+
     events_scaffold = await stage_2_generate_timeline_scaffold(
         stage1, config, str(deal_start_date), str(deal_end_date)
     )
 
-    # Stage 3: Content Generation (parallel)
-    events = await stage_3_generate_all_content(events_scaffold, stage1, config)
+    if progress_callback:
+        await progress_callback("stage3_start", f"Generating content for {len(events_scaffold)} events...", 35)
 
-    # Build metadata object
-    generated_at = datetime.utcnow().isoformat() + 'Z'
+    events = await stage_3_generate_all_content(events_scaffold, stage1, config, progress_callback)
+
+    if progress_callback:
+        await progress_callback("saving", "Saving deal...", 96)
+
+    generated_at = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
 
     metadata = {
         'record_type': 'deal_metadata',
         'deal_id': deal_id,
-        'filename': '',  # Will be set by file handler
+        'filename': '',
         'generated_at': generated_at,
         'deal_start_date': str(deal_start_date),
         'deal_end_date': str(deal_end_date),
@@ -402,7 +430,6 @@ async def generate_complete_deal(config: Dict[str, Any]) -> Dict[str, Any]:
             'sales_cycle_length_days': config['sales_cycle_length_days'],
             'starting_sentiment': config['starting_sentiment'],
             'ending_sentiment': config['ending_sentiment'],
-            'deal_outcome': config['deal_outcome'],
             'champion_entry': config['champion_entry'],
             'main_objection': config['main_objection'],
             'buyer_urgency': config['buyer_urgency'],

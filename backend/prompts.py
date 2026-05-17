@@ -52,12 +52,12 @@ Return a single JSON object with this exact structure:
     }}
   ],
   "sentiment_arc": [
-    {{ "stage": "Prospecting", "sentiment": "string" }},
-    {{ "stage": "Discovery", "sentiment": "string" }},
-    {{ "stage": "Demo", "sentiment": "string" }},
-    {{ "stage": "Evaluation", "sentiment": "string" }},
-    {{ "stage": "Negotiation", "sentiment": "string" }},
-    {{ "stage": "Closed", "sentiment": "string" }}
+    {{ "stage": "Prospecting", "sentiment": "positive | neutral | concerned | negative" }},
+    {{ "stage": "Discovery", "sentiment": "positive | neutral | concerned | negative" }},
+    {{ "stage": "Demo", "sentiment": "positive | neutral | concerned | negative" }},
+    {{ "stage": "Evaluation", "sentiment": "positive | neutral | concerned | negative" }},
+    {{ "stage": "Negotiation", "sentiment": "positive | neutral | concerned | negative" }},
+    {{ "stage": "Closed", "sentiment": "positive | neutral | concerned | negative" }}
   ],
   "stage_progression": [
     {{ "stage": "string", "entered_date": "YYYY-MM-DD", "exited_date": "YYYY-MM-DD or null" }}
@@ -177,7 +177,7 @@ Prior interactions:
 
 Return a JSON object:
 {{
-  "transcript": "Full multi-speaker transcript. Use 'Name: dialogue\\n' format per turn. Minimum 800 words. Reflect the call_type, sentiment, and stage accurately. Include realistic back-and-forth, follow-up questions, and natural filler. If the main objection is relevant to this call type, surface it explicitly. If a champion is present, show them actively supporting the deal.",
+  "transcript": "Multi-speaker transcript. Use 'Name: dialogue\\n' format per turn. 400-600 words. Reflect the call_type, sentiment, and stage accurately. Include realistic back-and-forth and follow-up questions. If the main objection is relevant, surface it explicitly. If a champion is present, show them supporting the deal.",
   "summary": "2-3 sentences covering what was discussed and decided.",
   "objections_raised": ["verbatim short form of any objection raised in this call"],
   "next_steps": ["specific action item agreed on this call"]
@@ -202,7 +202,7 @@ Prior interactions:
 
 Return a JSON object:
 {{
-  "body": "Full email body. Professional but human and specific. No generic openers like 'I hope this email finds you well'. Reference specific details about the company, deal context, and prior conversations. Length: 150-400 words. Tone must match the sentiment and purpose."
+  "body": "Email body. Professional but human and specific. No generic openers. Reference specific details from the deal context. Length: 100-200 words. Tone must match sentiment and purpose."
 }}"""
 
 STAGE_3_CRM_NOTE_PROMPT_TEMPLATE = """Generate the full content for this internal CRM note.

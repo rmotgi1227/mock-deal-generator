@@ -10,10 +10,10 @@ import os
 import re
 from pathlib import Path
 from typing import Dict, List, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import aiofiles
 
-DEALS_DIR = "backend/deals"
+DEALS_DIR = "deals"
 
 async def ensure_deals_dir_exists() -> None:
     """Create backend/deals directory if it doesn't exist."""
@@ -33,7 +33,7 @@ def generate_deal_filename(company_name: str, deal_id: str) -> str:
     # Slugify company name: lowercase, spaces->underscores, remove non-alphanumeric
     company_slug = re.sub(r'[^a-z0-9_]', '', company_name.lower().replace(' ', '_'))
     deal_id_short = deal_id[:8]
-    timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+    timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
     return f"{company_slug}_{deal_id_short}_{timestamp}.ndjson"
 
 async def write_deal(deal_id: str, metadata: Dict[str, Any], events: List[Dict[str, Any]]) -> str:
@@ -115,6 +115,8 @@ async def read_deal(filepath: str) -> Dict[str, Any]:
 def find_deal_file(deal_id: str) -> str:
     """
     Find .ndjson file containing deal_id in first line.
+    Intentionally synchronous — called from delete/get endpoints via FastAPI's
+    thread pool (run_in_executor), keeping aiofiles for large I/O only.
 
     Args:
         deal_id: UUID string to search for
@@ -157,9 +159,6 @@ async def list_deal_files() -> List[Dict[str, Any]]:
     await ensure_deals_dir_exists()
 
     deals = []
-
-    if not os.path.exists(DEALS_DIR):
-        return deals
 
     for filename in os.listdir(DEALS_DIR):
         if not filename.endswith('.ndjson'):

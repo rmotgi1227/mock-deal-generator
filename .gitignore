@@ -28,6 +28,13 @@ wheels/
 .installed.cfg
 *.egg
 
+# Node
+node_modules/
+frontend/node_modules/
+
+# Build output
+frontend/dist/
+
 # IDE
 .vscode/
 .idea/
@@ -44,3 +51,14 @@ htmlcov/
 # Logs
 *.log
 logs/
+.gstack/
+
+# Generated deal data
+backend/deals/
+
+# Local tool settings
+.claude/
+
+# Internal docs
+docs/superpowers/
+Mock_Deal_REQUIREMENTS.md
