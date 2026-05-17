@@ -1,0 +1,158 @@
+"""
+FastAPI application for Ycrest Mock Deal Generator.
+4 endpoints: POST /generate, GET /deals, GET /deals/{id}, DELETE /deals/{id}
+"""
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+import logging
+import os
+from dotenv import load_dotenv
+
+from models import (
+    GenerateRequest,
+    GenerateResponse,
+    DealsListResponse,
+    DealSummary,
+    DealResponse,
+    SuccessResponse,
+    DealContent,
+)
+from generator import generate_complete_deal
+from file_handler import write_deal, read_deal, list_deal_files, delete_deal, find_deal_file
+
+# Load environment variables from .env
+load_dotenv()
+
+# Initialize FastAPI app
+app = FastAPI(
+    title="Ycrest Mock Deal Generator",
+    description="Generate synthetic B2B sales deals with LLM",
+    version="1.0.0"
+)
+
+# Add CORS middleware to allow frontend at http://localhost:5173
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+@app.post("/api/generate", response_model=GenerateResponse)
+async def generate_deal(request: GenerateRequest):
+    """
+    POST /api/generate
+    Generate a complete deal with 3-stage pipeline.
+
+    Pydantic automatically validates the request body.
+    Returns 422 if validation fails.
+    """
+    try:
+        logger.info(f"Generating deal for {request.industry}")
+
+        # Convert request to dict for generator
+        config = request.dict()
+
+        # Run 3-stage pipeline
+        deal_result = await generate_complete_deal(config)
+
+        # Write deal to disk and get filename
+        filename = await write_deal(
+            deal_result['deal_id'],
+            deal_result['metadata'],
+            deal_result['events']
+        )
+
+        # Update metadata with actual filename
+        deal_result['metadata']['filename'] = filename
+
+        logger.info(f"Successfully generated deal {deal_result['deal_id']}")
+
+        return GenerateResponse(
+            deal_id=deal_result['deal_id'],
+            filename=filename,
+            deal=DealContent(
+                metadata=deal_result['metadata'],
+                events=deal_result['events']
+            )
+        )
+
+    except Exception as e:
+        logger.error(f"Generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
+
+@app.get("/api/deals", response_model=DealsListResponse)
+async def list_deals():
+    """
+    GET /api/deals
+    List all generated deals (newest first).
+    Returns summary for each deal (no full events).
+    """
+    try:
+        deals = await list_deal_files()
+        return DealsListResponse(deals=deals)
+    except Exception as e:
+        logger.error(f"Failed to list deals: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to list deals: {str(e)}")
+
+@app.get("/api/deals/{deal_id}", response_model=DealResponse)
+async def get_deal(deal_id: str):
+    """
+    GET /api/deals/{deal_id}
+    Get full deal object including all events.
+    """
+    try:
+        # Find file containing deal_id
+        filepath = find_deal_file(deal_id)
+
+        # Read and parse
+        deal_content = await read_deal(filepath)
+
+        # Get filename from metadata
+        filename = deal_content['metadata']['filename']
+
+        return DealResponse(
+            deal_id=deal_id,
+            filename=filename,
+            deal=DealContent(
+                metadata=deal_content['metadata'],
+                events=deal_content['events']
+            )
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    except Exception as e:
+        logger.error(f"Failed to get deal {deal_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get deal: {str(e)}")
+
+@app.delete("/api/deals/{deal_id}", response_model=SuccessResponse)
+async def delete_deal_endpoint(deal_id: str):
+    """
+    DELETE /api/deals/{deal_id}
+    Delete a deal file.
+    """
+    try:
+        await delete_deal(deal_id)
+        return SuccessResponse(success=True)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    except Exception as e:
+        logger.error(f"Failed to delete deal {deal_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete deal: {str(e)}")
+
+@app.get("/")
+async def root():
+    """Root endpoint."""
+    return {
+        "message": "Ycrest Mock Deal Generator API",
+        "docs": "http://localhost:8000/docs"
+    }
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
