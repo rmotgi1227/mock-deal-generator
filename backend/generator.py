@@ -29,64 +29,52 @@ load_dotenv()
 client = AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 MODEL = os.environ.get("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
 
-async def call_claude_with_retry(prompt: str, max_retries: int = 3) -> str:
+async def call_claude_with_retry(prompt: str, max_retries: int = 1) -> str:
     """
-    Call Claude API with retry logic. Strips markdown backticks if present.
+    Call Claude API. Strips markdown backticks if present.
+    NO RETRIES - fails on first error for debugging.
 
     Args:
         prompt: Full prompt (system + user combined)
-        max_retries: Number of retry attempts on JSON parse failure
 
     Returns:
         Valid JSON string response
 
     Raises:
-        Exception: If all retries fail
+        Exception: On any failure
     """
-    for attempt in range(max_retries):
+    message = await client.messages.create(
+        model=MODEL,
+        max_tokens=4096,
+        system=SYSTEM_PROMPT,
+        messages=[
+            {"role": "user", "content": prompt}
+        ]
+    )
+    response = message.content[0].text
+
+    # Strip markdown backticks if present
+    response = response.strip()
+    if response.startswith("```json"):
+        response = response[7:]
+    if response.startswith("```"):
+        response = response[3:]
+    if response.endswith("```"):
+        response = response[:-3]
+    response = response.strip()
+
+    # Validate JSON - try to parse
+    try:
+        json.loads(response)
+        return response
+    except json.JSONDecodeError as parse_err:
+        # Try common fixes: replace smart quotes
+        fixed = response.replace('"', '"').replace('"', '"').replace(''', "'").replace(''', "'")
         try:
-            message = await client.messages.create(
-                model=MODEL,
-                max_tokens=4096,
-                system=SYSTEM_PROMPT,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ]
-            )
-            response = message.content[0].text
-
-            # Strip markdown backticks if present
-            response = response.strip()
-            if response.startswith("```json"):
-                response = response[7:]
-            if response.startswith("```"):
-                response = response[3:]
-            if response.endswith("```"):
-                response = response[:-3]
-            response = response.strip()
-
-            # Validate JSON - try to parse and log errors
-            try:
-                json.loads(response)
-                return response
-            except json.JSONDecodeError as parse_err:
-                # Try common fixes: replace smart quotes
-                fixed = response.replace('"', '"').replace('"', '"').replace(''', "'").replace(''', "'")
-                try:
-                    json.loads(fixed)
-                    return fixed
-                except:
-                    pass  # Will retry or fail below
-                raise parse_err
-        except json.JSONDecodeError as e:
-            if attempt == max_retries - 1:
-                raise Exception(f"Claude response is not valid JSON after {max_retries} retries: {str(e)}")
-            # Retry on JSON parse failure
-            await asyncio.sleep(1)
-        except Exception as e:
-            if attempt == max_retries - 1:
-                raise Exception(f"Claude API call failed after {max_retries} retries: {str(e)}")
-            await asyncio.sleep(1)
+            json.loads(fixed)
+            return fixed
+        except:
+            raise Exception(f"Claude response is not valid JSON: {str(parse_err)}\n\nResponse:\n{response[:500]}")
 
 async def stage_1_generate_foundation(config: Dict[str, Any], deal_start_date: str, deal_end_date: str) -> Dict[str, Any]:
     """
