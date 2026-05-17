@@ -31,7 +31,7 @@ MODEL = os.environ.get("CLAUDE_MODEL", "claude-haiku-4-5")
 # Max tokens per event type — tuned to actual output needs
 MAX_TOKENS_BY_TYPE = {
     "stage1": 4096,
-    "stage2": 6000,   # was 10000 — Haiku output limit is 10K/min; one request must not consume it all
+    "stage2": 10000,  
     "call": 2500,
     "email": 1024,
     "crm_note": 400,
@@ -50,7 +50,7 @@ def _model_output_tpm() -> int:
     for family, tpm in _OUTPUT_TPM.items():
         if family in m:
             return tpm
-    return 8_000  # conservative fallback
+    return 8_000
 
 
 class _OutputTokenLimiter:
