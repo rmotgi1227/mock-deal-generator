@@ -82,6 +82,21 @@ npm run dev
 
 Frontend runs at `http://localhost:5173`. Open that URL in your browser.
 
+### Stop the servers
+
+Press `Ctrl+C` in each terminal to stop the backend and frontend processes.
+
+If a port is still in use after stopping:
+
+```bash
+# Kill backend (port 8000)
+lsof -ti :8000 | xargs kill -9
+
+# Kill frontend (port 5173 or 5174)
+lsof -ti :5173 | xargs kill -9
+lsof -ti :5174 | xargs kill -9
+```
+
 ---
 
 ## Generating a deal
