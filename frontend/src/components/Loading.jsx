@@ -1,13 +1,10 @@
 import React from 'react'
 
-// Spinner with optional label
-const Loading = ({ label = 'Loading...' }) => {
-  return (
-    <div className="flex items-center justify-center p-4">
-      <div className="spinner mr-2"></div>
-      <span className="text-gray-600">{label}</span>
-    </div>
-  )
-}
+const Loading = ({ label = 'Loading...' }) => (
+  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', gap: '10px' }}>
+    <div className="spinner" />
+    <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>{label}</span>
+  </div>
+)
 
 export default Loading

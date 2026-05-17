@@ -2,6 +2,7 @@ import React, { useEffect } from 'react'
 import { useParams } from 'react-router-dom'
 import { useDealContext } from '../../context/DealContext'
 import DealHeader from './DealHeader'
+import StakeholderGrid from './StakeholderGrid'
 import SentimentArc from './SentimentArc'
 import DealTimeline from './DealTimeline'
 import Loading from '../../components/Loading'
@@ -10,7 +11,7 @@ import ErrorMessage from '../../components/ErrorMessage'
 // Main deal detail page
 const DealView = () => {
   const { deal_id } = useParams()
-  const { currentDeal, loading, error, loadDeal, setError } = useDealContext()
+  const { currentDeal, detailLoading, detailError, loadDeal, setDetailError } = useDealContext()
 
   // Load deal on mount or when deal_id changes
   useEffect(() => {
@@ -21,34 +22,21 @@ const DealView = () => {
     }
   }, [deal_id, loadDeal])
 
-  if (loading) {
-    return (
-      <div className="p-8">
-        <Loading label="Loading deal..." />
-      </div>
-    )
-  }
+  const pad = { padding: '40px 48px' }
 
-  if (error) {
-    return (
-      <div className="p-8">
-        <ErrorMessage message={error} onRetry={() => setError(null)} />
-      </div>
-    )
-  }
+  if (detailLoading) return <div style={pad}><Loading label="Loading deal..." /></div>
 
-  if (!currentDeal) {
-    return (
-      <div className="p-8 text-center text-gray-500">
-        <p>No deal found</p>
-      </div>
-    )
-  }
+  if (detailError) return <div style={pad}><ErrorMessage message={detailError} onRetry={() => setDetailError(null)} /></div>
+
+  if (!currentDeal) return (
+    <div style={{ ...pad, color: 'var(--text-muted)', fontSize: '14px' }}>No deal found</div>
+  )
 
   return (
-    <div className="p-8 space-y-8">
+    <div style={{ ...pad, display: 'flex', flexDirection: 'column', gap: '40px' }}>
       <DealHeader deal={currentDeal} />
-      <SentimentArc metadata={currentDeal.metadata} />
+      <StakeholderGrid metadata={currentDeal.metadata} />
+      <SentimentArc metadata={currentDeal.metadata} events={currentDeal.events || []} />
       <DealTimeline deal={currentDeal} />
     </div>
   )

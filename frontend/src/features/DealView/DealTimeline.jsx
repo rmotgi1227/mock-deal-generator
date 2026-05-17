@@ -1,81 +1,101 @@
 import React, { useState, useMemo } from 'react'
 import TimelineEvent from '../../components/TimelineEvent'
 
-// Timeline grouped by stage with champion marker per spec
+const STAGE_NAMES = ['Prospecting', 'Discovery', 'Demo', 'Evaluation', 'Negotiation', 'Closed']
+
+// Maps champion_entry config value to the stage where the champion enters
+const CHAMPION_ENTRY_TO_STAGE = {
+  before_discovery: 'Prospecting',
+  during_discovery: 'Discovery',
+  after_demo: 'Demo',
+  during_procurement: 'Evaluation',
+  late_stage_rescue: 'Negotiation',
+}
+
 const DealTimeline = ({ deal }) => {
   const events = deal.events || []
   const metadata = deal.metadata
+  const [collapsedStages, setCollapsedStages] = useState({})
 
-  // Group events by stage
+  const toggleStage = (stageName) => {
+    setCollapsedStages(prev => ({ ...prev, [stageName]: !prev[stageName] }))
+  }
+
   const eventsByStage = useMemo(() => {
-    const grouped = {
-      'Prospecting': [],
-      'Discovery': [],
-      'Demo': [],
-      'Evaluation': [],
-      'Negotiation': [],
-      'Closed': []
-    }
-
-    events.forEach(event => {
-      if (grouped[event.stage]) {
-        grouped[event.stage].push(event)
-      }
-    })
-
-    // Sort events within each stage by timestamp
+    const grouped = { Prospecting: [], Discovery: [], Demo: [], Evaluation: [], Negotiation: [], Closed: [] }
+    events.forEach(event => { if (grouped[event.stage]) grouped[event.stage].push(event) })
     Object.keys(grouped).forEach(stage => {
       grouped[stage].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
     })
-
     return grouped
   }, [events])
 
-  const stageNames = ['Prospecting', 'Discovery', 'Demo', 'Evaluation', 'Negotiation', 'Closed']
+  const championEntryStage = CHAMPION_ENTRY_TO_STAGE[metadata.config.champion_entry] || null
 
   return (
     <div>
-      <h2 className="text-xl font-bold text-gray-900 mb-6">Timeline</h2>
+      <h2 style={{ fontSize: '16px', fontWeight: '600', color: 'var(--text)', marginBottom: '28px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+        Timeline
+      </h2>
 
-      <div className="space-y-8">
-        {stageNames.map(stageName => {
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+        {STAGE_NAMES.map(stageName => {
           const stageEvents = eventsByStage[stageName] || []
-
-          // Check if champion entered in this stage per spec
-          const stageInfo = metadata.stage_progression.find(s => s.stage === stageName)
-          const championEntered = stageInfo?.champion_entered
+          const championEntered = championEntryStage === stageName
+          const isCollapsed = collapsedStages[stageName]
 
           return (
             <div key={stageName}>
-              {/* Stage divider */}
-              <div className="flex items-center mb-4">
-                <div className="flex-1 h-px bg-gray-200"></div>
-                <h3 className="px-4 font-bold text-gray-700">{stageName}</h3>
-                <div className="flex-1 h-px bg-gray-200"></div>
-              </div>
+              <button
+                onClick={() => toggleStage(stageName)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  width: '100%',
+                  marginBottom: '16px',
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  gap: '12px',
+                }}
+              >
+                <div style={{ flex: 1, height: '1px', background: 'var(--rule)' }} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                    {stageName}
+                  </span>
+                  <span style={{ fontSize: '10px', color: 'var(--text-dim)' }}>{isCollapsed ? '▶' : '▼'}</span>
+                </div>
+                <div style={{ flex: 1, height: '1px', background: 'var(--rule)' }} />
+              </button>
 
-              {/* Champion marker */}
-              {championEntered && (
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4 text-sm text-blue-800">
-                  👤 Champion entered in this stage
+              {!isCollapsed && (
+                <div>
+                  {championEntered && (
+                    <div style={{
+                      background: 'var(--teal-low)',
+                      border: '1px solid var(--teal-border)',
+                      borderRadius: '6px',
+                      padding: '10px 14px',
+                      marginBottom: '12px',
+                      fontSize: '12px',
+                      color: 'var(--teal)',
+                    }}>
+                      Champion entered in this stage
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {stageEvents.length === 0 ? (
+                      <p style={{ fontSize: '13px', color: 'var(--text-dim)', fontStyle: 'italic' }}>No events in this stage</p>
+                    ) : (
+                      stageEvents.map(event => (
+                        <TimelineEvent key={event.id} event={event} allEvents={events} stakeholders={metadata.stakeholders} />
+                      ))
+                    )}
+                  </div>
                 </div>
               )}
-
-              {/* Events in stage */}
-              <div className="space-y-3">
-                {stageEvents.length === 0 ? (
-                  <p className="text-gray-400 text-sm italic">No events in this stage</p>
-                ) : (
-                  stageEvents.map(event => (
-                    <TimelineEvent
-                      key={event.id}
-                      event={event}
-                      allEvents={events}
-                      stakeholders={metadata.stakeholders}
-                    />
-                  ))
-                )}
-              </div>
             </div>
           )
         })}

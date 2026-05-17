@@ -1,11 +1,30 @@
-/* Global styles */
-body {
+:root {
+  --bg: #111111;
+  --surface: #1E1E1E;
+  --surface-hi: #252525;
+  --teal: #3da894;
+  --teal-low: rgba(61, 168, 148, 0.07);
+  --teal-mid: rgba(61, 168, 148, 0.14);
+  --teal-border: rgba(61, 168, 148, 0.26);
+  --text: #e8e8ed;
+  --text-muted: #c8c8e0;
+  --text-dim: #9898b0;
+  --rule: rgba(255, 255, 255, 0.07);
+  --amber: #e8a44a;
+}
+
+* {
+  box-sizing: border-box;
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
+  padding: 0;
+}
+
+body {
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background: var(--bg);
+  color: var(--text);
 }
 
 #root {
@@ -13,36 +32,46 @@ body {
   width: 100%;
 }
 
-/* Sentiment color utilities */
-.sentiment-positive {
-  @apply bg-green-100 text-green-800;
+/* Select options inherit dark bg */
+select option {
+  background: var(--surface);
+  color: var(--text);
 }
 
-.sentiment-neutral {
-  @apply bg-gray-100 text-gray-700;
-}
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--surface-hi); border-radius: 3px; }
 
-.sentiment-concerned {
-  @apply bg-amber-100 text-amber-800;
-}
-
-.sentiment-negative {
-  @apply bg-red-100 text-red-800;
-}
-
-/* Loading spinner */
+/* Spinner */
 .spinner {
   display: inline-block;
   width: 1rem;
   height: 1rem;
-  border: 2px solid rgba(59, 130, 246, 0.3);
+  border: 2px solid rgba(61, 168, 148, 0.25);
   border-radius: 50%;
-  border-top-color: rgb(59, 130, 246);
+  border-top-color: var(--teal);
   animation: spin 0.8s linear infinite;
 }
 
 @keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+  to { transform: rotate(360deg); }
 }
+
+/* Hamburger icon */
+.hamburger { display: inline-block; cursor: pointer; }
+
+.hamburger .bar1,
+.hamburger .bar2,
+.hamburger .bar3 {
+  width: 28px;
+  height: 3px;
+  background-color: var(--text-muted);
+  margin: 5px 0;
+  border-radius: 2px;
+  transition: 0.35s ease;
+}
+
+.hamburger.change .bar1 { transform: translate(0, 8px) rotate(-45deg); }
+.hamburger.change .bar2 { opacity: 0; }
+.hamburger.change .bar3 { transform: translate(0, -8px) rotate(45deg); }

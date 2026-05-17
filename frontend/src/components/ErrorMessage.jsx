@@ -1,16 +1,30 @@
 import React from 'react'
 
-// Error display with optional retry button
 const ErrorMessage = ({ message, onRetry }) => {
   if (!message) return null
-
   return (
-    <div className="bg-red-50 border border-red-200 rounded p-4 mb-4">
-      <p className="text-red-800 text-sm">{message}</p>
+    <div style={{
+      background: 'rgba(239,68,68,0.08)',
+      border: '1px solid rgba(239,68,68,0.25)',
+      borderRadius: '6px',
+      padding: '12px 16px',
+      marginBottom: '16px',
+    }}>
+      <p style={{ fontSize: '13px', color: '#f87171' }}>{message}</p>
       {onRetry && (
         <button
           onClick={onRetry}
-          className="mt-2 px-3 py-1 bg-red-100 text-red-800 rounded text-sm hover:bg-red-200 transition"
+          style={{
+            marginTop: '8px',
+            padding: '4px 12px',
+            background: 'rgba(239,68,68,0.12)',
+            color: '#f87171',
+            borderRadius: '4px',
+            border: 'none',
+            fontSize: '12px',
+            fontFamily: 'inherit',
+            cursor: 'pointer',
+          }}
         >
           Retry
         </button>

@@ -2,29 +2,57 @@ import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useDealContext } from '../../context/DealContext'
 import ErrorMessage from '../../components/ErrorMessage'
-import Loading from '../../components/Loading'
+import GenerationProgress from '../../components/GenerationProgress'
 
-// Form for generating new deal with 14 fields
+const inputStyle = {
+  width: '100%',
+  padding: '9px 12px',
+  background: 'var(--surface)',
+  border: '1px solid var(--rule)',
+  borderRadius: '6px',
+  color: 'var(--text)',
+  fontFamily: 'inherit',
+  fontSize: '14px',
+  outline: 'none',
+  transition: 'border-color 0.15s',
+}
+
+const labelStyle = {
+  display: 'block',
+  fontSize: '12px',
+  fontWeight: '500',
+  color: 'var(--text-muted)',
+  marginBottom: '6px',
+  textTransform: 'uppercase',
+  letterSpacing: '0.06em',
+}
+
+const Field = ({ label, children }) => (
+  <div>
+    <label style={labelStyle}>{label}</label>
+    {children}
+  </div>
+)
+
 const ConfigForm = () => {
   const navigate = useNavigate()
-  const { generateDeal, loading, error, setError } = useDealContext()
+  const { generateDealStream, cancelGeneration, loading, error, setError, generationProgress, generationStep } = useDealContext()
 
-  // Form state with default values per Mock_Deal_REQUIREMENTS.md Section 10.4
   const [formData, setFormData] = useState({
-    company_name: '',  // Empty to auto-generate
+    company_name: '',
     industry: 'Fintech',
     deal_size: '$75k ARR',
     sales_cycle_length_days: 45,
-    starting_sentiment: 'neutral',  // CRITICAL: Must be neutral
+    starting_sentiment: 'neutral',
     ending_sentiment: 'positive',
     deal_outcome: 'closed_won',
-    champion_entry: 'after_demo',  // CRITICAL: Must be after_demo
-    main_objection: 'Security Review',  // CRITICAL: Must be Security Review
+    champion_entry: 'after_demo',
+    main_objection: 'Security Review',
     buyer_urgency: 'medium',
-    num_calls: 5,  // CRITICAL: Must be 5
+    num_calls: 5,
     emails_per_stage: 2,
     num_stakeholders: 3,
-    complexity: 'messy'  // CRITICAL: Must be messy
+    complexity: 'messy',
   })
 
   const handleChange = (e) => {
@@ -35,256 +63,174 @@ const ConfigForm = () => {
         ['sales_cycle_length_days', 'num_calls', 'emails_per_stage', 'num_stakeholders'].includes(name)
           ? parseInt(value)
           : value
-      )
+      ),
     }))
   }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
     setError(null)
-
     try {
-      // Send company_name as null if empty string for auto-generation
-      const payload = {
-        ...formData,
-        company_name: formData.company_name === '' ? null : formData.company_name
-      }
-      const response = await generateDeal(payload)
-      // Auto-navigate to deal detail page
-      navigate(`/deals/${response.deal_id}`)
+      const payload = { ...formData, company_name: formData.company_name === '' ? null : formData.company_name }
+      const result = await generateDealStream(payload)
+      navigate(`/deals/${result.deal_id}`)
     } catch (err) {
-      // Error is already set in context, displayed below
+      // Error already set in context via generateDealStream; navigate is not called on failure
     }
   }
 
+  const focusStyle = (e) => e.target.style.borderColor = 'var(--teal-border)'
+  const blurStyle = (e) => e.target.style.borderColor = 'var(--rule)'
+
   return (
-    <div className="p-8 max-w-2xl mx-auto">
-      <h1 className="text-3xl font-bold text-gray-900 mb-2">Generate Deal</h1>
-      <p className="text-gray-600 mb-6">Configure your synthetic B2B sales deal parameters</p>
+    <div style={{ minHeight: '100%', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '60px 48px' }}>
+      <div style={{ width: '100%', maxWidth: '760px' }}>
+        <h1 style={{ fontSize: '28px', fontWeight: '700', color: 'var(--text)', marginBottom: '6px', letterSpacing: '-0.5px' }}>
+          Generate Deal
+        </h1>
+        <p style={{ fontSize: '14px', color: 'var(--text-muted)', marginBottom: '36px' }}>
+          Configure parameters for a synthetic B2B sales deal.
+        </p>
 
-      {error && <ErrorMessage message={error} />}
+        {error && <div style={{ marginBottom: '24px' }}><ErrorMessage message={error} /></div>}
 
-      <form onSubmit={handleSubmit} className="space-y-6">
-        {/* Company Name */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Company Name <span className="text-gray-400">(optional)</span>
-          </label>
-          <input
-            type="text"
-            name="company_name"
-            value={formData.company_name}
-            onChange={handleChange}
-            placeholder="Leave blank to auto-generate"
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-          />
-        </div>
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+          {/* Row 1: Company Name full width */}
+          <Field label="Company Name">
+            <input
+              type="text"
+              name="company_name"
+              value={formData.company_name}
+              onChange={handleChange}
+              onFocus={focusStyle}
+              onBlur={blurStyle}
+              placeholder="Leave blank to auto-generate"
+              style={inputStyle}
+            />
+          </Field>
 
-        {/* Industry */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Industry</label>
-          <input
-            type="text"
-            name="industry"
-            value={formData.industry}
-            onChange={handleChange}
-            placeholder="e.g., Fintech"
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-          />
-        </div>
+          {/* Row 2: Industry + Deal Size */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+            <Field label="Industry">
+              <input type="text" name="industry" value={formData.industry} onChange={handleChange} onFocus={focusStyle} onBlur={blurStyle} style={inputStyle} />
+            </Field>
+            <Field label="Deal Size">
+              <input type="text" name="deal_size" value={formData.deal_size} onChange={handleChange} onFocus={focusStyle} onBlur={blurStyle} style={inputStyle} />
+            </Field>
+          </div>
 
-        {/* Deal Size */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Deal Size</label>
-          <input
-            type="text"
-            name="deal_size"
-            value={formData.deal_size}
-            onChange={handleChange}
-            placeholder="e.g., $75k ARR"
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-          />
-        </div>
+          {/* Row 3: Starting Sentiment + Ending Sentiment */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+            <Field label="Starting Sentiment">
+              <select name="starting_sentiment" value={formData.starting_sentiment} onChange={handleChange} onFocus={focusStyle} onBlur={blurStyle} style={inputStyle}>
+                <option value="positive">Positive</option>
+                <option value="neutral">Neutral</option>
+                <option value="concerned">Concerned</option>
+                <option value="negative">Negative</option>
+              </select>
+            </Field>
+            <Field label="Ending Sentiment">
+              <select name="ending_sentiment" value={formData.ending_sentiment} onChange={handleChange} onFocus={focusStyle} onBlur={blurStyle} style={inputStyle}>
+                <option value="positive">Positive</option>
+                <option value="neutral">Neutral</option>
+                <option value="concerned">Concerned</option>
+                <option value="negative">Negative</option>
+              </select>
+            </Field>
+          </div>
 
-        {/* Sales Cycle Length */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Sales Cycle Length (days)</label>
-          <input
-            type="number"
-            name="sales_cycle_length_days"
-            value={formData.sales_cycle_length_days}
-            onChange={handleChange}
-            min="14"
-            max="180"
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-          />
-        </div>
+          {/* Row 4: Deal Outcome + Champion Entry */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+            <Field label="Deal Outcome">
+              <select name="deal_outcome" value={formData.deal_outcome} onChange={handleChange} onFocus={focusStyle} onBlur={blurStyle} style={inputStyle}>
+                <option value="closed_won">Closed Won</option>
+                <option value="closed_lost">Closed Lost</option>
+              </select>
+            </Field>
+            <Field label="Champion Entry">
+              <select name="champion_entry" value={formData.champion_entry} onChange={handleChange} onFocus={focusStyle} onBlur={blurStyle} style={inputStyle}>
+                <option value="none">None</option>
+                <option value="before_discovery">Before Discovery</option>
+                <option value="during_discovery">During Discovery</option>
+                <option value="after_demo">After Demo</option>
+                <option value="during_procurement">During Procurement</option>
+                <option value="late_stage_rescue">Late Stage Rescue</option>
+              </select>
+            </Field>
+          </div>
 
-        {/* Starting Sentiment */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Starting Sentiment</label>
-          <select
-            name="starting_sentiment"
-            value={formData.starting_sentiment}
-            onChange={handleChange}
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-          >
-            <option value="positive">Positive</option>
-            <option value="neutral">Neutral</option>
-            <option value="concerned">Concerned</option>
-            <option value="negative">Negative</option>
-          </select>
-        </div>
+          {/* Row 5: Main Objection + Buyer Urgency */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+            <Field label="Main Objection">
+              <input type="text" name="main_objection" value={formData.main_objection} onChange={handleChange} onFocus={focusStyle} onBlur={blurStyle} style={inputStyle} />
+            </Field>
+            <Field label="Buyer Urgency">
+              <select name="buyer_urgency" value={formData.buyer_urgency} onChange={handleChange} onFocus={focusStyle} onBlur={blurStyle} style={inputStyle}>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+            </Field>
+          </div>
 
-        {/* Ending Sentiment */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Ending Sentiment</label>
-          <select
-            name="ending_sentiment"
-            value={formData.ending_sentiment}
-            onChange={handleChange}
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-          >
-            <option value="positive">Positive</option>
-            <option value="neutral">Neutral</option>
-            <option value="concerned">Concerned</option>
-            <option value="negative">Negative</option>
-          </select>
-        </div>
+          {/* Row 6: Sales Cycle + Num Calls + Emails Per Stage + Stakeholders */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '20px' }}>
+            <Field label="Sales Cycle (days)">
+              <input type="number" name="sales_cycle_length_days" value={formData.sales_cycle_length_days} onChange={handleChange} onFocus={focusStyle} onBlur={blurStyle} min="14" max="180" style={inputStyle} />
+            </Field>
+            <Field label="Number of Calls">
+              <input type="number" name="num_calls" value={formData.num_calls} onChange={handleChange} onFocus={focusStyle} onBlur={blurStyle} min="1" max="10" style={inputStyle} />
+            </Field>
+            <Field label="Emails Per Stage">
+              <input type="number" name="emails_per_stage" value={formData.emails_per_stage} onChange={handleChange} onFocus={focusStyle} onBlur={blurStyle} min="1" max="5" style={inputStyle} />
+            </Field>
+            <Field label="Stakeholders">
+              <input type="number" name="num_stakeholders" value={formData.num_stakeholders} onChange={handleChange} onFocus={focusStyle} onBlur={blurStyle} min="2" max="8" style={inputStyle} />
+            </Field>
+          </div>
 
-        {/* Deal Outcome */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Deal Outcome</label>
-          <select
-            name="deal_outcome"
-            value={formData.deal_outcome}
-            onChange={handleChange}
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-          >
-            <option value="closed_won">Closed Won</option>
-            <option value="closed_lost">Closed Lost</option>
-          </select>
-        </div>
+          {/* Row 7: Complexity full width */}
+          <Field label="Complexity">
+            <select name="complexity" value={formData.complexity} onChange={handleChange} onFocus={focusStyle} onBlur={blurStyle} style={inputStyle}>
+              <option value="simple">Simple</option>
+              <option value="normal">Normal</option>
+              <option value="messy">Messy</option>
+            </select>
+          </Field>
 
-        {/* Champion Entry */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Champion Entry</label>
-          <select
-            name="champion_entry"
-            value={formData.champion_entry}
-            onChange={handleChange}
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-          >
-            <option value="none">None</option>
-            <option value="before_discovery">Before Discovery</option>
-            <option value="during_discovery">During Discovery</option>
-            <option value="after_demo">After Demo</option>
-            <option value="during_procurement">During Procurement</option>
-            <option value="late_stage_rescue">Late Stage Rescue</option>
-          </select>
-        </div>
-
-        {/* Main Objection */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Main Objection</label>
-          <input
-            type="text"
-            name="main_objection"
-            value={formData.main_objection}
-            onChange={handleChange}
-            placeholder="e.g., Security Review"
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-          />
-        </div>
-
-        {/* Buyer Urgency */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Buyer Urgency</label>
-          <select
-            name="buyer_urgency"
-            value={formData.buyer_urgency}
-            onChange={handleChange}
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-          >
-            <option value="low">Low</option>
-            <option value="medium">Medium</option>
-            <option value="high">High</option>
-          </select>
-        </div>
-
-        {/* Number of Calls */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Number of Calls</label>
-          <input
-            type="number"
-            name="num_calls"
-            value={formData.num_calls}
-            onChange={handleChange}
-            min="1"
-            max="10"
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-          />
-        </div>
-
-        {/* Emails Per Stage */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Emails Per Stage</label>
-          <input
-            type="number"
-            name="emails_per_stage"
-            value={formData.emails_per_stage}
-            onChange={handleChange}
-            min="1"
-            max="5"
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-          />
-        </div>
-
-        {/* Number of Stakeholders */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Number of Stakeholders</label>
-          <input
-            type="number"
-            name="num_stakeholders"
-            value={formData.num_stakeholders}
-            onChange={handleChange}
-            min="2"
-            max="8"
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-          />
-        </div>
-
-        {/* Complexity */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Complexity</label>
-          <select
-            name="complexity"
-            value={formData.complexity}
-            onChange={handleChange}
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-          >
-            <option value="simple">Simple</option>
-            <option value="normal">Normal</option>
-            <option value="messy">Messy</option>
-          </select>
-        </div>
-
-        {/* Submit Button */}
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full px-4 py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
-        >
-          {loading ? (
-            <>
-              <div className="spinner mr-2"></div>
-              Generating deal...
-            </>
-          ) : (
-            'Generate Deal'
+          {loading && generationProgress > 0 && (
+            <GenerationProgress progress={generationProgress} step={generationStep} onCancel={cancelGeneration} />
           )}
-        </button>
-      </form>
+
+          <button
+            type="submit"
+            disabled={loading}
+            style={{
+              width: '100%',
+              padding: '11px',
+              background: loading ? 'var(--surface-hi)' : 'var(--teal)',
+              color: loading ? 'var(--text-muted)' : '#fff',
+              borderRadius: '6px',
+              border: 'none',
+              fontFamily: 'inherit',
+              fontSize: '14px',
+              fontWeight: '500',
+              cursor: loading ? 'not-allowed' : 'pointer',
+              transition: 'opacity 0.15s',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px',
+            }}
+          >
+            {loading ? (
+              generationProgress === 0 ? (
+                <><div className="spinner" />Connecting...</>
+              ) : 'Generating...'
+            ) : 'Generate Deal'}
+          </button>
+        </form>
+      </div>
     </div>
   )
 }

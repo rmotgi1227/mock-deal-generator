@@ -1,86 +1,139 @@
-import React, { createContext, useState, useCallback } from 'react'
-import { dealApi } from '../utils/api'
+import React, { createContext, useState, useCallback, useRef } from 'react'
+import { dealApi, BASE_URL } from '../utils/api'
 
-// Create context
 export const DealContext = createContext()
 
-// Provider component
 export const DealProvider = ({ children }) => {
   const [currentDeal, setCurrentDeal] = useState(null)
   const [dealsList, setDealsList] = useState([])
   const [loading, setLoading] = useState(false)
+  const [listLoading, setListLoading] = useState(false)
+  const [detailLoading, setDetailLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [listError, setListError] = useState(null)
+  const [detailError, setDetailError] = useState(null)
+  const [generationProgress, setGenerationProgress] = useState(0)
+  const [generationStep, setGenerationStep] = useState('')
+  const abortRef = useRef(null)
 
-  // Generate new deal with retry logic (3 attempts)
-  const generateDeal = useCallback(async (config) => {
+  // Generate deal with real-time SSE progress streaming
+  const generateDealStream = useCallback(async (config) => {
     setLoading(true)
     setError(null)
+    setGenerationProgress(0)
+    setGenerationStep('Starting...')
 
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        const response = await dealApi.generate(config)
-        setCurrentDeal(response.deal)
-        setLoading(false)
-        return response // Return full response with deal_id for navigation
-      } catch (err) {
-        if (attempt === 3) {
-          const errorMsg = err.response?.data?.detail || err.message || 'Generation failed'
-          setError(errorMsg)
-          setLoading(false)
-          throw err
-        }
-        // Continue to next attempt if not the last one
+    const controller = new AbortController()
+    abortRef.current = controller
+
+    try {
+      const response = await fetch(`${BASE_URL}/api/generate-stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+        signal: controller.signal,
+      })
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}))
+        throw new Error(errData.detail || `HTTP ${response.status}`)
       }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() // keep incomplete line
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const raw = line.slice(6).trim()
+          if (!raw) continue
+
+          let event
+          try { event = JSON.parse(raw) } catch { continue }
+
+          if (event.type === 'progress') {
+            setGenerationProgress(event.progress)
+            setGenerationStep(event.message)
+          } else if (event.type === 'complete') {
+            setGenerationProgress(100)
+            setGenerationStep('Complete!')
+            setCurrentDeal(event.deal)
+            setLoading(false)
+            return event // {deal_id, filename, deal}
+          } else if (event.type === 'error') {
+            throw new Error(event.message)
+          }
+        }
+      }
+
+      throw new Error('Stream ended without completion event')
+    } catch (err) {
+      if (err.name === 'AbortError') return
+      const errorMsg = err.message || 'Generation failed'
+      setError(errorMsg)
+      setLoading(false)
+      setGenerationProgress(0)
+      setGenerationStep('')
+      throw err
     }
   }, [])
 
   // Fetch all deals for sidebar
   const fetchDealsList = useCallback(async () => {
-    setLoading(true)
-    setError(null)
+    setListLoading(true)
+    setListError(null)
     try {
       const response = await dealApi.listDeals()
-      setDealsList(response.deals || [])
-      setLoading(false)
+      setDealsList(response.data.deals || [])
+      setListLoading(false)
     } catch (err) {
       const errorMsg = err.response?.data?.detail || 'Failed to load deals'
-      setError(errorMsg)
-      setLoading(false)
+      setListError(errorMsg)
+      setListLoading(false)
     }
   }, [])
 
   // Load single deal by ID
   const loadDeal = useCallback(async (dealId) => {
-    setLoading(true)
-    setError(null)
+    setDetailLoading(true)
+    setDetailError(null)
     try {
       const response = await dealApi.getDeal(dealId)
-      setCurrentDeal(response.deal)
-      setLoading(false)
-      return response.deal
+      setCurrentDeal(response.data.deal)
+      setDetailLoading(false)
+      return response.data.deal
     } catch (err) {
       const errorMsg = err.response?.status === 404 ? 'Deal not found' : err.response?.data?.detail || 'Failed to load deal'
-      setError(errorMsg)
-      setLoading(false)
+      setDetailError(errorMsg)
+      setDetailLoading(false)
       throw err
     }
   }, [])
 
+  const cancelGeneration = useCallback(() => {
+    abortRef.current?.abort()
+  }, [])
+
   // Delete deal by ID
   const deleteDeal = useCallback(async (dealId) => {
-    // Optimistic update: remove from UI immediately
     const previousList = dealsList
     setDealsList(dealsList.filter(d => d.deal_id !== dealId))
 
     try {
       await dealApi.deleteDeal(dealId)
-      // Refetch list on success
       await fetchDealsList()
     } catch (err) {
-      // Restore list on error
       setDealsList(previousList)
       const errorMsg = err.response?.data?.detail || 'Failed to delete deal'
-      setError(errorMsg)
+      setListError(errorMsg)
     }
   }, [dealsList, fetchDealsList])
 
@@ -91,9 +144,18 @@ export const DealProvider = ({ children }) => {
     setDealsList,
     loading,
     setLoading,
+    listLoading,
+    detailLoading,
     error,
     setError,
-    generateDeal,
+    listError,
+    setListError,
+    detailError,
+    setDetailError,
+    generationProgress,
+    generationStep,
+    generateDealStream,
+    cancelGeneration,
     fetchDealsList,
     loadDeal,
     deleteDeal
@@ -106,7 +168,6 @@ export const DealProvider = ({ children }) => {
   )
 }
 
-// Custom hook to use context
 export const useDealContext = () => {
   const context = React.useContext(DealContext)
   if (!context) {

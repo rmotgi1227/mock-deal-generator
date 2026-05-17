@@ -1,96 +1,98 @@
 import React from 'react'
 
-// 6-node sentiment arc visualization per spec
-const SentimentArc = ({ metadata }) => {
+const SentimentArc = ({ metadata, events }) => {
   const stages = metadata.sentiment_arc
-  const stageNames = ['Prospecting', 'Discovery', 'Demo', 'Evaluation', 'Negotiation', 'Closed']
 
-  // Sentiment to color mapping per Mock_Deal_REQUIREMENTS.md Section 9
-  const sentimentColors = {
-    positive: 'bg-green-500',
-    neutral: 'bg-gray-400',
-    concerned: 'bg-amber-500',
-    negative: 'bg-red-500'
+  const sentimentColor = {
+    positive: 'var(--teal)',
+    neutral:  'var(--text-muted)',
+    concerned:'var(--amber)',
+    negative: '#f87171',
   }
 
-  const sentimentLabels = {
-    positive: '😊 Positive',
-    neutral: '😐 Neutral',
-    concerned: '😟 Concerned',
-    negative: '😞 Negative'
+  const sentimentBg = {
+    positive: 'var(--teal-low)',
+    neutral:  'rgba(136,136,160,0.06)',
+    concerned:'rgba(232,164,74,0.07)',
+    negative: 'rgba(239,68,68,0.07)',
+  }
+
+  const sentimentBorder = {
+    positive: 'var(--teal-border)',
+    neutral:  'rgba(136,136,160,0.18)',
+    concerned:'rgba(232,164,74,0.22)',
+    negative: 'rgba(239,68,68,0.22)',
+  }
+
+  // Derive a 1-sentence brief from the first event in each stage
+  const getBrief = (stageName) => {
+    const stageEvents = events
+      .filter(e => e.stage === stageName)
+      .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+
+    if (!stageEvents.length) return null
+    const e = stageEvents[0]
+    if (e.record_type === 'call') {
+      const s = e.summary || ''
+      return s.split('.')[0] + '.'
+    }
+    if (e.record_type === 'email') return e.subject || null
+    if (e.record_type === 'crm_note') return e.note_preview || null
+    return null
   }
 
   return (
     <div>
-      <h2 className="text-xl font-bold text-gray-900 mb-6">Sentiment Arc</h2>
+      <h2 style={{ fontSize: '16px', fontWeight: '600', color: 'var(--text)', marginBottom: '24px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+        Sentiment Arc
+      </h2>
 
-      {/* SVG arc with connecting lines */}
-      <div className="bg-white rounded-lg p-8 overflow-x-auto">
-        <svg width="100%" height="300" className="min-w-max" viewBox="0 0 1200 300">
-          {/* Connecting lines */}
-          {stages.map((stage, i) => {
-            if (i < stages.length - 1) {
-              const x1 = 100 + i * 180
-              const x2 = 100 + (i + 1) * 180
-              const nextSentiment = stages[i + 1].sentiment
+      <div style={{ display: 'flex', alignItems: 'stretch', gap: '0', overflowX: 'auto', paddingBottom: '4px' }}>
+        {stages.map((stage, i) => {
+          const color = sentimentColor[stage.sentiment] || 'var(--text-muted)'
+          const brief = getBrief(stage.stage)
 
-              return (
-                <line
-                  key={`line-${i}`}
-                  x1={x1}
-                  y1="150"
-                  x2={x2}
-                  y2="150"
-                  stroke={sentimentColors[nextSentiment]}
-                  strokeWidth="3"
-                  opacity="0.6"
-                />
-              )
-            }
-            return null
-          })}
+          return (
+            <React.Fragment key={stage.stage}>
+              {/* Card */}
+              <div style={{
+                flex: '1',
+                minWidth: '140px',
+                background: sentimentBg[stage.sentiment],
+                border: `1px solid ${sentimentBorder[stage.sentiment]}`,
+                borderRadius: '8px',
+                padding: '16px',
+                display: 'flex',
+                flexDirection: 'column',
+                minHeight: '130px',
+              }}>
+                {/* Stage name pinned to top */}
+                <div style={{ fontSize: '11px', fontWeight: '600', color: color, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '8px' }}>
+                  {stage.stage}
+                </div>
 
-          {/* Nodes */}
-          {stages.map((stage, i) => {
-            const x = 100 + i * 180
-            const sentimentColor = sentimentColors[stage.sentiment]
+                {/* Sentiment + brief centered in remaining space */}
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: '6px' }}>
+                  <div style={{ fontSize: '15px', fontWeight: '600', color: 'var(--text)' }}>
+                    {stage.sentiment.charAt(0).toUpperCase() + stage.sentiment.slice(1)}
+                  </div>
+                  {brief && (
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: '1.5' }}>
+                      {brief}
+                    </div>
+                  )}
+                </div>
+              </div>
 
-            return (
-              <g key={`node-${i}`}>
-                {/* Node circle */}
-                <circle
-                  cx={x}
-                  cy="150"
-                  r="30"
-                  className={sentimentColor}
-                  opacity="0.8"
-                />
-
-                {/* Stage name below */}
-                <text
-                  x={x}
-                  y="200"
-                  textAnchor="middle"
-                  className="text-sm font-medium"
-                  fill="#1f2937"
-                >
-                  {stageNames[i]}
-                </text>
-
-                {/* Sentiment label above */}
-                <text
-                  x={x}
-                  y="110"
-                  textAnchor="middle"
-                  className="text-xs"
-                  fill="#374151"
-                >
-                  {sentimentLabels[stage.sentiment]}
-                </text>
-              </g>
-            )
-          })}
-        </svg>
+              {/* Arrow between cards */}
+              {i < stages.length - 1 && (
+                <div style={{ display: 'flex', alignItems: 'center', padding: '0 8px', color: 'var(--text-dim)', fontSize: '14px', flexShrink: 0 }}>
+                  →
+                </div>
+              )}
+            </React.Fragment>
+          )
+        })}
       </div>
     </div>
   )

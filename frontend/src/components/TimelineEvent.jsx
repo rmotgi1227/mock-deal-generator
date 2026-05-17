@@ -1,204 +1,163 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState } from 'react'
 
-// Timeline event card with collapse/expand functionality per spec
 const TimelineEvent = ({ event, allEvents, stakeholders }) => {
   const [expanded, setExpanded] = useState(false)
 
-  // Get stakeholder names from IDs
-  const getStakeholderNames = (ids) => {
-    return ids
-      .map(id => {
-        const stakeholder = stakeholders.find(s => s.id === id)
-        return stakeholder ? stakeholder.name : 'Unknown'
-      })
-      .join(', ')
+  const getStakeholderNames = (ids) =>
+    ids.map(id => stakeholders.find(s => s.id === id)?.name || 'Unknown').join(', ')
+
+  const formatDate = (timestamp) =>
+    new Date(timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+
+  const sentimentStyle = {
+    positive: { background: 'var(--teal-mid)', color: 'var(--teal)' },
+    neutral:  { background: 'rgba(136,136,160,0.12)', color: 'var(--text-muted)' },
+    concerned:{ background: 'rgba(232,164,74,0.12)', color: 'var(--amber)' },
+    negative: { background: 'rgba(239,68,68,0.12)', color: '#f87171' },
   }
 
-  // Get sentiment color class per spec
-  const getSentimentClass = (sentiment) => {
-    const sentimentMap = {
-      positive: 'sentiment-positive',
-      neutral: 'sentiment-neutral',
-      concerned: 'sentiment-concerned',
-      negative: 'sentiment-negative'
-    }
-    return sentimentMap[sentiment] || 'bg-gray-100 text-gray-700'
+  const CANONICAL = ['positive', 'neutral', 'concerned', 'negative']
+  const normalizeSentiment = (s) => {
+    if (!s) return 'neutral'
+    const lower = s.toLowerCase()
+    return CANONICAL.find(c => lower === c) || CANONICAL.find(c => lower.includes(c)) || 'neutral'
+  }
+  const sentimentKey = normalizeSentiment(event.sentiment)
+  const sentimentLabel = sentimentKey.charAt(0).toUpperCase() + sentimentKey.slice(1)
+
+  const typeLabel = { call: 'Call', email: 'Email', crm_note: 'Note' }[event.record_type] || '–'
+
+  const cardStyle = {
+    background: 'var(--surface)',
+    border: '1px solid var(--rule)',
+    borderRadius: '8px',
+    padding: '14px 16px',
+    cursor: 'pointer',
+    transition: 'border-color 0.15s',
   }
 
-  // Format timestamp
-  const formatDate = (timestamp) => {
-    return new Date(timestamp).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    })
-  }
-
-  // Get event icon per spec
-  const getIcon = () => {
-    switch (event.record_type) {
-      case 'call':
-        return '☎️'
-      case 'email':
-        return '✉️'
-      case 'crm_note':
-        return '📝'
-      default:
-        return '•'
-    }
-  }
-
-  // Collapsed view per spec
   if (!expanded) {
     return (
       <div
         onClick={() => setExpanded(true)}
-        className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 cursor-pointer transition"
+        style={cardStyle}
+        onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--teal-border)'}
+        onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--rule)'}
       >
-        <div className="flex items-start gap-3">
-          {/* Left: Icon */}
-          <div className="text-2xl mt-1">{getIcon()}</div>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+          <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', paddingTop: '2px', minWidth: '36px' }}>
+            {typeLabel}
+          </span>
 
-          {/* Center: Title, participants, date */}
-          <div className="flex-1 min-w-0">
-            <div className="font-medium text-gray-900">
-              {event.record_type === 'call'
-                ? event.title
-                : event.record_type === 'email'
-                ? event.subject
-                : 'CRM Note'}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '4px' }}>
+              <span style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {event.record_type === 'call' ? event.title : event.record_type === 'email' ? event.subject : 'CRM Note'}
+              </span>
+              {event.record_type === 'email' && event.sender?.name && (
+                <span style={{ fontSize: '12px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{event.sender.name}</span>
+              )}
             </div>
-            <div className="text-sm text-gray-600 mt-1">
+            <div style={{ fontSize: '12px', color: 'var(--text-dim)' }}>
               {event.record_type === 'crm_note'
-                ? `${event.author}`
-                : getStakeholderNames(event.participants?.map(p => p.stakeholder_id) || [])}
+                ? event.author
+                : event.record_type === 'call'
+                ? getStakeholderNames(event.participants?.map(p => p.stakeholder_id) || [])
+                : null}
             </div>
-            <div className="text-xs text-gray-500 mt-1">
+            <div style={{ fontSize: '11px', color: 'var(--text-dim)', marginTop: '4px' }}>
               {formatDate(event.timestamp)}
             </div>
           </div>
 
-          {/* Right: Stage tag and sentiment */}
-          <div className="flex-shrink-0 flex gap-2">
-            <span className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs font-medium">
-              {event.stage}
-            </span>
-            <span className={`px-2 py-1 rounded text-xs font-medium ${getSentimentClass(event.sentiment)}`}>
-              {event.sentiment}
-            </span>
-          </div>
+          <span style={{ fontSize: '11px', fontWeight: '500', padding: '3px 8px', borderRadius: '4px', whiteSpace: 'nowrap', flexShrink: 0, ...sentimentStyle[sentimentKey] }}>
+            {sentimentLabel}
+          </span>
         </div>
       </div>
     )
   }
 
-  // Expanded view per spec
+  // Expanded
   return (
     <div
       onClick={() => setExpanded(false)}
-      className="border border-gray-200 rounded-lg p-4 bg-gray-50 cursor-pointer transition"
+      style={{ ...cardStyle, borderColor: 'var(--teal-border)', background: 'var(--surface-hi)' }}
     >
-      {/* Header (same as collapsed) */}
-      <div className="flex items-start gap-3 mb-4 pb-4 border-b border-gray-200">
-        <div className="text-2xl">{getIcon()}</div>
-        <div className="flex-1 min-w-0">
-          <div className="font-medium text-gray-900">
-            {event.record_type === 'call'
-              ? event.title
-              : event.record_type === 'email'
-              ? event.subject
-              : 'CRM Note'}
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', marginBottom: '16px', paddingBottom: '14px', borderBottom: '1px solid var(--rule)' }}>
+        <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', paddingTop: '2px', minWidth: '36px' }}>
+          {typeLabel}
+        </span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', marginBottom: '4px' }}>
+            {event.record_type === 'call' ? event.title : event.record_type === 'email' ? event.subject : 'CRM Note'}
           </div>
-          <div className="text-sm text-gray-600 mt-1">
-            {event.record_type === 'crm_note'
-              ? `${event.author}`
-              : getStakeholderNames(event.participants?.map(p => p.stakeholder_id) || [])}
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+            {event.record_type === 'crm_note' ? event.author
+              : event.record_type === 'call' ? getStakeholderNames(event.participants?.map(p => p.stakeholder_id) || [])
+              : null}
           </div>
-          <div className="text-xs text-gray-500 mt-1">
-            {formatDate(event.timestamp)}
-          </div>
+          <div style={{ fontSize: '11px', color: 'var(--text-dim)', marginTop: '4px' }}>{formatDate(event.timestamp)}</div>
         </div>
+        <span style={{ fontSize: '11px', fontWeight: '500', padding: '3px 8px', borderRadius: '4px', flexShrink: 0, ...sentimentStyle[sentimentKey] }}>
+          {sentimentLabel}
+        </span>
       </div>
 
-      {/* Content based on type per spec */}
+      {/* Call content */}
       {event.record_type === 'call' && (
-        <div className="space-y-4">
-          {/* Transcript */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <div>
-            <h4 className="font-medium text-gray-900 mb-2">Transcript</h4>
-            <div className="bg-white border border-gray-200 rounded p-3 text-sm text-gray-700 font-mono whitespace-pre-wrap max-h-96 overflow-y-auto">
+            <div style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' }}>Transcript</div>
+            <div style={{ background: 'var(--surface)', border: '1px solid var(--rule)', borderRadius: '6px', padding: '12px', fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'monospace', whiteSpace: 'pre-wrap', maxHeight: '320px', overflowY: 'auto', lineHeight: '1.6' }}>
               {event.transcript}
             </div>
           </div>
-
-          {/* Summary */}
           <div>
-            <h4 className="font-medium text-gray-900 mb-2">Summary</h4>
-            <p className="text-sm text-gray-700">{event.summary}</p>
+            <div style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' }}>Summary</div>
+            <p style={{ fontSize: '13px', color: 'var(--text)', lineHeight: '1.6' }}>{event.summary}</p>
           </div>
-
-          {/* Next Steps */}
-          <div>
-            <h4 className="font-medium text-gray-900 mb-2">Next Steps</h4>
-            <ul className="list-disc list-inside space-y-1">
-              {(event.next_steps || []).map((step, i) => (
-                <li key={i} className="text-sm text-gray-700">{step}</li>
-              ))}
-            </ul>
-          </div>
-
-          {/* Objections */}
-          {event.objections_raised && event.objections_raised.length > 0 && (
+          {event.next_steps?.length > 0 && (
             <div>
-              <h4 className="font-medium text-gray-900 mb-2">Objections Raised</h4>
-              <ul className="list-disc list-inside space-y-1">
-                {event.objections_raised.map((obj, i) => (
-                  <li key={i} className="text-sm text-gray-700">{obj}</li>
-                ))}
+              <div style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' }}>Next Steps</div>
+              <ul style={{ paddingLeft: '16px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                {event.next_steps.map((step, i) => <li key={i} style={{ fontSize: '13px', color: 'var(--text-muted)', lineHeight: '1.5' }}>{step}</li>)}
+              </ul>
+            </div>
+          )}
+          {event.objections_raised?.length > 0 && (
+            <div>
+              <div style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' }}>Objections</div>
+              <ul style={{ paddingLeft: '16px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                {event.objections_raised.map((obj, i) => <li key={i} style={{ fontSize: '13px', color: 'var(--text-muted)', lineHeight: '1.5' }}>{obj}</li>)}
               </ul>
             </div>
           )}
         </div>
       )}
 
+      {/* Email content */}
       {event.record_type === 'email' && (
-        <div className="space-y-4">
-          {/* Find all emails in thread per spec */}
-          {(() => {
-            const threadEmails = allEvents.filter(
-              e => e.record_type === 'email' && e.thread_id === event.thread_id
-            )
-            threadEmails.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
-
-            return threadEmails.map((email, idx) => (
-              <div key={email.id} className="border border-gray-200 rounded p-3 bg-white">
-                {idx > 0 && <div className="mb-3 pb-3 text-xs text-gray-500">---------- Forwarded message ----------</div>}
-                <div className="flex justify-between mb-2">
-                  <div className="text-sm font-medium text-gray-900">{email.sender.name}</div>
-                  <div className="text-xs text-gray-500">{formatDate(email.timestamp)}</div>
-                </div>
-                <div className="text-xs text-gray-600 mb-2">
-                  To: {email.recipients.map(r => r.name).join(', ')}
-                  {email.cc && email.cc.length > 0 && ` | CC: ${email.cc.map(c => c.name).join(', ')}`}
-                </div>
-                <div className="text-sm text-gray-700">{email.body}</div>
-              </div>
-            ))
-          })()}
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--rule)', borderRadius: '6px', padding: '14px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+            <span style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)' }}>{event.sender.name}</span>
+            <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>{formatDate(event.timestamp)}</span>
+          </div>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+            To: {event.recipients.map(r => r.name).join(', ')}
+            {event.cc?.length > 0 && ` · CC: ${event.cc.map(c => c.name).join(', ')}`}
+          </div>
+          <div style={{ fontSize: '13px', color: 'var(--text)', lineHeight: '1.6' }}>{event.body}</div>
         </div>
       )}
 
+      {/* CRM Note content */}
       {event.record_type === 'crm_note' && (
-        <div className="space-y-4">
-          <div className="flex items-center gap-2 mb-2">
-            <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs font-medium">Internal</span>
-          </div>
-          <p className="text-sm text-gray-700">{event.content}</p>
-          <div className="text-xs text-gray-500">
-            {event.author} · {formatDate(event.timestamp)}
-          </div>
+        <div>
+          <div style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' }}>Internal Note</div>
+          <p style={{ fontSize: '13px', color: 'var(--text)', lineHeight: '1.6', marginBottom: '10px' }}>{event.content}</p>
+          <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>{event.author} · {formatDate(event.timestamp)}</div>
         </div>
       )}
     </div>
