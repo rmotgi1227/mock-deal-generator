@@ -88,6 +88,76 @@ export const DealProvider = ({ children }) => {
     }
   }, [])
 
+  // Generate series with real-time SSE progress streaming
+  const seriesGenerateStream = useCallback(async (seriesConfig) => {
+    setLoading(true)
+    setError(null)
+    setGenerationProgress(0)
+    setGenerationStep('Starting...')
+
+    const controller = new AbortController()
+    abortRef.current = controller
+
+    try {
+      const response = await fetch(`${BASE_URL}/api/generate-series-stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(seriesConfig),
+        signal: controller.signal,
+      })
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}))
+        throw new Error(errData.detail || `HTTP ${response.status}`)
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop()
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const raw = line.slice(6).trim()
+          if (!raw) continue
+
+          let event
+          try { event = JSON.parse(raw) } catch { continue }
+
+          if (event.type === 'progress') {
+            setGenerationProgress(event.progress)
+            setGenerationStep(event.message)
+          } else if (event.type === 'complete') {
+            setGenerationProgress(100)
+            setGenerationStep('Complete!')
+            setCurrentDeal(event.deal)
+            setLoading(false)
+            return event
+          } else if (event.type === 'error') {
+            throw new Error(event.message)
+          }
+        }
+      }
+
+      throw new Error('Stream ended without completion event')
+    } catch (err) {
+      if (err.name === 'AbortError') return
+      const errorMsg = err.message || 'Generation failed'
+      setError(errorMsg)
+      setLoading(false)
+      setGenerationProgress(0)
+      setGenerationStep('')
+      throw err
+    }
+  }, [])
+
   // Fetch all deals for sidebar
   const fetchDealsList = useCallback(async () => {
     setListLoading(true)
@@ -124,7 +194,7 @@ export const DealProvider = ({ children }) => {
     abortRef.current?.abort()
   }, [])
 
-  const bulkGenerateStream = useCallback(async (count) => {
+  const bulkGenerateStream = useCallback(async (count, overrides = null) => {
     setBulkLoading(true)
     setBulkProgress({ completed: 0, failed: 0, total: count })
 
@@ -135,7 +205,7 @@ export const DealProvider = ({ children }) => {
       const response = await fetch(`${BASE_URL}/api/bulk-generate-stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ count }),
+        body: JSON.stringify({ count, overrides }),
         signal: controller.signal,
       })
 
@@ -219,6 +289,7 @@ export const DealProvider = ({ children }) => {
     generationProgress,
     generationStep,
     generateDealStream,
+    seriesGenerateStream,
     cancelGeneration,
     fetchDealsList,
     loadDeal,
