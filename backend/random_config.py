@@ -1,6 +1,7 @@
 """Random deal config generator for bulk generation."""
 
 import random
+from typing import Optional
 
 ADOPTION_CHALLENGES = [
     "integration_complexity", "training_gap", "workflow_mismatch",
@@ -38,7 +39,7 @@ URGENCIES = ["low", "medium", "high"]
 COMPLEXITIES = ["simple", "normal", "messy"]
 
 
-def generate_random_config() -> dict:
+def generate_random_config(overrides: Optional[dict] = None) -> dict:
     industry = random.choice(INDUSTRIES)
     deal_size = random.choice(DEAL_SIZES)
     complexity = random.choice(COMPLEXITIES)
@@ -80,7 +81,7 @@ def generate_random_config() -> dict:
         2
     )
 
-    return {
+    config = {
         "company_name": None,
         "industry": industry,
         "deal_size": deal_size,
@@ -102,4 +103,55 @@ def generate_random_config() -> dict:
             "churn_probability": churn_probability,
             "post_close_days": random.randint(14, 60),
         },
+    }
+
+    if overrides:
+        # Merge overrides: overrides take precedence; None values in overrides mean "use random"
+        for key, val in overrides.items():
+            if val is not None:
+                config[key] = val
+    return config
+
+
+_FREQUENCY_CALLS = {
+    "daily": lambda months: min(months * 20, 10),
+    "weekly": lambda months: min(months * 4, 10),
+    "biweekly": lambda months: min(months * 2, 10),
+    "monthly": lambda months: min(months, 10),
+}
+
+_FREQUENCY_EMAILS = {
+    "daily": 5,
+    "weekly": 3,
+    "biweekly": 2,
+    "monthly": 1,
+}
+
+def series_to_generate_config(series: dict) -> dict:
+    """Convert SeriesRequest dict to GenerateRequest-compatible dict."""
+    months = series['account_age_months']
+    freq = series['frequency']
+    num_calls = _FREQUENCY_CALLS[freq](months)
+    emails_per_stage = _FREQUENCY_EMAILS[freq]
+    num_stakeholders = min(2 + months // 2, 8)
+    return {
+        'company_name': series.get('company_name'),
+        'industry': series['industry'],
+        'deal_size': series['deal_size'],
+        'sales_cycle_length_days': months * 30,
+        'starting_sentiment': series['starting_sentiment'],
+        'ending_sentiment': series['ending_sentiment'],
+        'deal_outcome': series['deal_outcome'],
+        'champion_entry': series.get('champion_entry', 'after_demo'),
+        'main_objection': series['main_objection'],
+        'buyer_urgency': series['buyer_urgency'],
+        'num_calls': max(num_calls, 1),
+        'emails_per_stage': emails_per_stage,
+        'num_stakeholders': num_stakeholders,
+        'complexity': series['complexity'],
+        'ae_name': series.get('ae_name'),
+        'se_name': series.get('se_name'),
+        'business_use_case': series.get('business_use_case'),
+        'is_series': True,
+        'cs_scenario': series.get('cs_scenario'),
     }
