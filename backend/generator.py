@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from prompts import (
     SYSTEM_PROMPT,
     STAGE_1_PROMPT_TEMPLATE,
+    STAGE_1_CS_PROMPT_TEMPLATE,
     STAGE_2_PROMPT_TEMPLATE,
     STAGE_3_CALL_PROMPT_TEMPLATE,
     STAGE_3_EMAIL_PROMPT_TEMPLATE,
@@ -209,6 +210,41 @@ async def stage_1_generate_foundation(config: Dict[str, Any], deal_start_date: s
 
     response = await call_claude(prompt, MAX_TOKENS_BY_TYPE["stage1"])
     return json.loads(response)
+
+
+async def generate_stage_1_cs_context(
+    stage1_json: str,
+    cs_scenario,
+    adoption_challenge: str,
+    support_contact_frequency: str,
+    churn_probability: float,
+    deal_close_date: str,
+    cs_start_date: str,
+    cs_end_date: str,
+    token_limiter: _OutputTokenLimiter,
+) -> Dict[str, Any]:
+    """Generate post-close CS context given Stage 1 foundation."""
+    prompt = STAGE_1_CS_PROMPT_TEMPLATE.format(
+        stage1_json=stage1_json,
+        adoption_challenge=adoption_challenge,
+        support_contact_frequency=support_contact_frequency,
+        churn_probability=churn_probability,
+        deal_close_date=deal_close_date,
+        cs_start_date=cs_start_date,
+        cs_end_date=cs_end_date,
+    )
+
+    response = await client.messages.create(
+        model=MODEL,
+        max_tokens=MAX_TOKENS_BY_TYPE["stage1"],
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    await token_limiter.consume(response.usage.output_tokens)
+
+    cs_json = _parse_claude_response(response.content[0].text)
+    return json.loads(cs_json)
 
 
 async def stage_2_generate_timeline_scaffold(
@@ -456,6 +492,41 @@ async def generate_complete_deal(
         await progress_callback("stage1", "Generating company profile and stakeholders...", 5)
 
     stage1 = await stage_1_generate_foundation(config, str(deal_start_date), str(deal_end_date))
+    stage_1_json_str = json.dumps(stage1)
+
+    # Generate CS context if enabled
+    cs_context = None
+    cs_scenario = config.get('cs_scenario')
+    output_token_limiter = external_limiter or _OutputTokenLimiter(_model_output_tpm())
+
+    if cs_scenario and cs_scenario.get('enabled'):
+        # Sales cycle complete, now add CS period
+        deal_close_date = str(deal_end_date)  # This is sales close (end of sales_cycle_length_days)
+
+        # CS period: from close+1 to (close + post_close_days)
+        cs_start = (datetime.fromisoformat(deal_close_date) + timedelta(days=1)).strftime("%Y-%m-%d")
+        cs_end = (datetime.fromisoformat(deal_close_date) + timedelta(days=cs_scenario.get('post_close_days', 30))).strftime("%Y-%m-%d")
+
+        # Extract enum values (they're already strings from Pydantic dict conversion)
+        adoption_challenge_value = cs_scenario.get('adoption_challenge')
+        if hasattr(adoption_challenge_value, 'value'):
+            adoption_challenge_value = adoption_challenge_value.value
+
+        support_contact_freq_value = cs_scenario.get('support_contact_frequency')
+        if hasattr(support_contact_freq_value, 'value'):
+            support_contact_freq_value = support_contact_freq_value.value
+
+        cs_context = await generate_stage_1_cs_context(
+            stage1_json=stage_1_json_str,
+            cs_scenario=cs_scenario,
+            adoption_challenge=adoption_challenge_value or '',
+            support_contact_frequency=support_contact_freq_value or 'low',
+            churn_probability=cs_scenario.get('churn_probability', 0.5),
+            deal_close_date=deal_close_date,
+            cs_start_date=cs_start,
+            cs_end_date=cs_end,
+            token_limiter=output_token_limiter,
+        )
 
     if progress_callback:
         await progress_callback("stage2", "Building deal timeline scaffold...", 25)
