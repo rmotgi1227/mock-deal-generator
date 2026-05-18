@@ -238,6 +238,7 @@ def build_cached_system_blocks(
     stage1: Dict[str, Any],
     config: Dict[str, Any],
     events_scaffold: Optional[List[Dict[str, Any]]] = None,
+    use_ephemeral: bool = False,
 ) -> list:
     """
     Build system content blocks with deal context marked for caching.
@@ -271,17 +272,27 @@ def build_cached_system_blocks(
         f"deal_outcome={config['deal_outcome']}"
     )
 
+    cache_control = {"type": "ephemeral"} if use_ephemeral else {"type": "ephemeral"}  # Both ephemeral for now
+
     if events_scaffold:
-        timeline_context = f"\nDeal timeline scaffold ({len(events_scaffold)} events):\n{json.dumps(events_scaffold)}"
+        # For large deals (30+ events), only include recent 15 for context
+        # Avoids inflating every event generation call
+        events_for_context = events_scaffold
+        if len(events_scaffold) > 30:
+            events_for_context = events_scaffold[-15:]  # Most recent 15
+            timeline_context = f"\nDeal timeline scaffold (showing last {len(events_for_context)} of {len(events_scaffold)} events):\n{json.dumps(events_for_context)}"
+        else:
+            timeline_context = f"\nDeal timeline scaffold ({len(events_scaffold)} events):\n{json.dumps(events_scaffold)}"
+
         return [
             {"type": "text", "text": SYSTEM_PROMPT},
             {"type": "text", "text": deal_context},
-            {"type": "text", "text": timeline_context, "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": timeline_context, "cache_control": cache_control},
         ]
 
     return [
         {"type": "text", "text": SYSTEM_PROMPT},
-        {"type": "text", "text": deal_context, "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": deal_context, "cache_control": cache_control},
     ]
 
 
@@ -798,7 +809,7 @@ async def stage_3_generate_all_content(
     the Tier-1 per-minute budget to avoid 429s.
     Pass external_limiter to share a single budget across concurrent deals.
     """
-    system_blocks = build_cached_system_blocks(stage1, config, events)
+    system_blocks = build_cached_system_blocks(stage1, config, events, use_ephemeral=False)
     semaphore = asyncio.Semaphore(2)
     limiter = external_limiter or _OutputTokenLimiter(_model_output_tpm())
     total = len(events)
