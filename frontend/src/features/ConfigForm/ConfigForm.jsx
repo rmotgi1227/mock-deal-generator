@@ -4,6 +4,7 @@ import { useDealContext } from '../../context/DealContext'
 import ErrorMessage from '../../components/ErrorMessage'
 import GenerationProgress from '../../components/GenerationProgress'
 import BulkGeneratePanel from './BulkGeneratePanel'
+import SeriesPanel from './SeriesPanel'
 
 const inputStyle = {
   width: '100%',
@@ -55,6 +56,9 @@ const ConfigForm = () => {
     emails_per_stage: 2,
     num_stakeholders: 3,
     complexity: 'messy',
+    ae_name: '',
+    se_name: '',
+    business_use_case: '',
   })
 
   const [csEnabled, setCsEnabled] = useState(false)
@@ -84,6 +88,9 @@ const ConfigForm = () => {
       const payload = {
         ...formData,
         company_name: formData.company_name === '' ? null : formData.company_name,
+        ae_name: formData.ae_name || null,
+        se_name: formData.se_name || null,
+        business_use_case: formData.business_use_case || null,
         cs_scenario: csEnabled ? { enabled: true, ...csData } : null,
       }
       const result = await generateDealStream(payload)
@@ -123,9 +130,12 @@ const ConfigForm = () => {
         <div style={{ display: 'flex', gap: '8px', marginBottom: '32px' }}>
           <button style={tabStyle(mode === 'single')} onClick={() => setMode('single')}>Single Deal</button>
           <button style={tabStyle(mode === 'bulk')} onClick={() => setMode('bulk')}>Bulk Random</button>
+          <button style={tabStyle(mode === 'series')} onClick={() => setMode('series')}>Series</button>
         </div>
 
         {mode === 'bulk' && <BulkGeneratePanel />}
+
+        {mode === 'series' && <SeriesPanel />}
 
         {mode === 'single' && <>
         {error && <div style={{ marginBottom: '24px' }}><ErrorMessage message={error} /></div>}
@@ -143,6 +153,27 @@ const ConfigForm = () => {
               placeholder="Leave blank to auto-generate"
               style={inputStyle}
             />
+          </Field>
+
+          {/* Row 1b: AE Name + SE Name */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+            <Field label="Account Executive (AE)">
+              <input type="text" name="ae_name" value={formData.ae_name} onChange={handleChange}
+                onFocus={focusStyle} onBlur={blurStyle}
+                placeholder="Leave blank to auto-generate" style={inputStyle} />
+            </Field>
+            <Field label="Sales Engineer (SE)">
+              <input type="text" name="se_name" value={formData.se_name} onChange={handleChange}
+                onFocus={focusStyle} onBlur={blurStyle}
+                placeholder="Leave blank to auto-generate" style={inputStyle} />
+            </Field>
+          </div>
+
+          {/* Row 1c: Business Use Case */}
+          <Field label="Business Use Case">
+            <input type="text" name="business_use_case" value={formData.business_use_case} onChange={handleChange}
+              onFocus={focusStyle} onBlur={blurStyle}
+              placeholder="e.g. Automate compliance reporting" style={inputStyle} />
           </Field>
 
           {/* Row 2: Industry + Deal Size */}
