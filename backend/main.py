@@ -1,6 +1,6 @@
 """
 FastAPI application for Ycrest Mock Deal Generator.
-4 endpoints: POST /generate, GET /deals, GET /deals/{id}, DELETE /deals/{id}
+6 endpoints: POST /generate-stream, POST /generate-series-stream, POST /bulk-generate-stream, GET /deals, GET /deals/{id}, DELETE /deals/{id}
 """
 
 from fastapi import FastAPI, HTTPException

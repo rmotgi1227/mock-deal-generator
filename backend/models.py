@@ -376,7 +376,7 @@ class SeriesRequest(BaseModel):
     company_name: Optional[str] = Field(None)
     industry: str = Field(...)
     deal_size: str = Field(...)
-    deal_outcome: DealOutcomeEnum = Field(...)
+    deal_outcome: DealOutcomeEnum = Field(..., description="Deal outcome (closed_won or closed_lost)")
     complexity: ComplexityEnum = Field(...)
     main_objection: str = Field(...)
     buyer_urgency: BuyerUrgencyEnum = Field(...)
