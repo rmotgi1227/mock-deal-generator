@@ -19,6 +19,7 @@ from prompts import (
     STAGE_1_PROMPT_TEMPLATE,
     STAGE_1_CS_PROMPT_TEMPLATE,
     STAGE_2_PROMPT_TEMPLATE,
+    STAGE_2_CS_PROMPT_TEMPLATE,
     STAGE_3_CALL_PROMPT_TEMPLATE,
     STAGE_3_EMAIL_PROMPT_TEMPLATE,
     STAGE_3_CRM_NOTE_PROMPT_TEMPLATE,
@@ -245,6 +246,43 @@ async def generate_stage_1_cs_context(
 
     cs_json = _parse_claude_response(response.content[0].text)
     return json.loads(cs_json)
+
+
+async def generate_stage_2_cs_timeline(
+    stage1_json: str,
+    stage2_json: str,
+    cs_context: Dict[str, Any],
+    support_contact_frequency: str,
+    churn_probability: float,
+    deal_close_date: str,
+    cs_start_date: str,
+    cs_end_date: str,
+    token_limiter: _OutputTokenLimiter,
+) -> List[Dict[str, Any]]:
+    """Generate support timeline scaffold given Stage 2 and CS context."""
+    prompt = STAGE_2_CS_PROMPT_TEMPLATE.format(
+        stage1_json=stage1_json,
+        stage2_json=stage2_json,
+        cs_context_json=json.dumps(cs_context),
+        deal_close_date=deal_close_date,
+        cs_start_date=cs_start_date,
+        cs_end_date=cs_end_date,
+        support_contact_frequency=support_contact_frequency,
+        churn_probability=churn_probability,
+        churn_date=cs_context.get("cs_context", {}).get("churn_date"),
+    )
+
+    response = await client.messages.create(
+        model=MODEL,
+        max_tokens=MAX_TOKENS_BY_TYPE["stage2"],
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    await token_limiter.consume(response.usage.output_tokens)
+
+    cs_timeline_json = _parse_claude_response(response.content[0].text)
+    return json.loads(cs_timeline_json)
 
 
 async def stage_2_generate_timeline_scaffold(
@@ -534,6 +572,31 @@ async def generate_complete_deal(
     events_scaffold = await stage_2_generate_timeline_scaffold(
         stage1, config, str(deal_start_date), str(deal_end_date)
     )
+
+    # Generate CS timeline events if CS context was created in Stage 1
+    cs_events_scaffold = []
+    if cs_context:
+        stage_2_json_str = json.dumps(events_scaffold)
+
+        # CS dates (same as in Stage 1 context generation)
+        deal_close_date = str(deal_end_date)
+        cs_start = (datetime.fromisoformat(deal_close_date) + timedelta(days=1)).strftime("%Y-%m-%d")
+        cs_end = (datetime.fromisoformat(deal_close_date) + timedelta(days=cs_scenario.get('post_close_days', 30))).strftime("%Y-%m-%d")
+
+        cs_events_scaffold = await generate_stage_2_cs_timeline(
+            stage1_json=stage_1_json_str,
+            stage2_json=stage_2_json_str,
+            cs_context=cs_context,
+            support_contact_frequency=cs_scenario.get('support_contact_frequency', 'low'),
+            churn_probability=cs_scenario.get('churn_probability', 0.5),
+            deal_close_date=deal_close_date,
+            cs_start_date=cs_start,
+            cs_end_date=cs_end,
+            token_limiter=output_token_limiter,
+        )
+        # Merge CS events into main timeline
+        events_scaffold.extend(cs_events_scaffold)
+        events_scaffold.sort(key=lambda e: e["timestamp"])
 
     if progress_callback:
         await progress_callback("stage3_start", f"Generating content for {len(events_scaffold)} events...", 35)
