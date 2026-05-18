@@ -350,6 +350,7 @@ class GenerateResponse(BaseModel):
     deal_id: str
     filename: str
     deal: DealContent
+    token_usage: Optional['TokenUsage'] = None
 
 class DealResponse(BaseModel):
     """GET /api/deals/{deal_id} response."""

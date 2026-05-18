@@ -22,6 +22,7 @@ from models import (
     DealContent,
     BulkGenerateRequest,
     SeriesRequest,
+    TokenUsage,
 )
 from generator import generate_complete_deal, _OutputTokenLimiter, _model_output_tpm
 from file_handler import write_deal, read_deal, list_deal_files, delete_deal, find_deal_file
@@ -82,7 +83,8 @@ async def generate_deal_stream(request: GenerateRequest):
                 "deal": {
                     "metadata": deal_result['metadata'],
                     "events": deal_result['events']
-                }
+                },
+                "token_usage": deal_result.get('token_usage'),
             })
         except Exception as e:
             logger.error(f"Stream generation failed: {str(e)}")
@@ -131,7 +133,8 @@ async def generate_series_stream(request: SeriesRequest):
                 "type": "complete",
                 "deal_id": deal_result['deal_id'],
                 "filename": filename,
-                "deal": {"metadata": deal_result['metadata'], "events": deal_result['events']}
+                "deal": {"metadata": deal_result['metadata'], "events": deal_result['events']},
+                "token_usage": deal_result.get('token_usage'),
             })
         except Exception as e:
             logger.error(f"Series generation failed: {str(e)}")
@@ -188,7 +191,8 @@ async def generate_deal(request: GenerateRequest):
             deal=DealContent(
                 metadata=deal_result['metadata'],
                 events=deal_result['events']
-            )
+            ),
+            token_usage=deal_result.get('token_usage'),
         )
 
     except Exception as e:
