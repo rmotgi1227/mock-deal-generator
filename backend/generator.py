@@ -275,7 +275,12 @@ def build_cached_system_blocks(
     ]
 
 
-async def stage_1_generate_foundation(config: Dict[str, Any], deal_start_date: str, deal_end_date: str) -> Dict[str, Any]:
+async def stage_1_generate_foundation(
+    config: Dict[str, Any],
+    deal_start_date: str,
+    deal_end_date: str,
+    token_tracker: Optional['TokenTracker'] = None,
+) -> Dict[str, Any]:
     company_name_line = (
         f"Company Name: {config['company_name']}"
         if config['company_name']
@@ -306,7 +311,7 @@ async def stage_1_generate_foundation(config: Dict[str, Any], deal_start_date: s
         business_use_case_line=business_use_case_line,
     )
 
-    response = await call_claude(prompt, MAX_TOKENS_BY_TYPE["stage1"])
+    response = await call_claude(prompt, MAX_TOKENS_BY_TYPE["stage1"], stage="stage1", token_tracker=token_tracker)
     return json.loads(response)
 
 
@@ -319,6 +324,7 @@ async def generate_stage_1_cs_context(
     cs_start_date: str,
     cs_end_date: str,
     token_limiter: _OutputTokenLimiter,
+    token_tracker: Optional['TokenTracker'] = None,
 ) -> Dict[str, Any]:
     """Generate post-close CS context given Stage 1 foundation."""
     cs_system_blocks = [
@@ -333,7 +339,7 @@ async def generate_stage_1_cs_context(
         cs_start_date=cs_start_date,
         cs_end_date=cs_end_date,
     )
-    response = await call_claude_cached(cs_system_blocks, prompt, MAX_TOKENS_BY_TYPE["stage1"], token_limiter)
+    response = await call_claude_cached(cs_system_blocks, prompt, MAX_TOKENS_BY_TYPE["stage1"], token_limiter, stage="stage1_cs", token_tracker=token_tracker)
     return json.loads(response)
 
 
@@ -347,6 +353,7 @@ async def generate_stage_2_cs_timeline(
     cs_start_date: str,
     cs_end_date: str,
     token_limiter: _OutputTokenLimiter,
+    token_tracker: Optional['TokenTracker'] = None,
 ) -> List[Dict[str, Any]]:
     """Generate support timeline scaffold given Stage 2 and CS context.
     stage1_json + stage2_json combined easily exceed 4096 tokens, so the
@@ -365,7 +372,7 @@ async def generate_stage_2_cs_timeline(
         churn_probability=churn_probability,
         churn_date=cs_context.get("cs_context", {}).get("churn_date"),
     )
-    response = await call_claude_cached(cs_system_blocks, prompt, MAX_TOKENS_BY_TYPE["stage2"], token_limiter)
+    response = await call_claude_cached(cs_system_blocks, prompt, MAX_TOKENS_BY_TYPE["stage2"], token_limiter, stage="stage2_cs", token_tracker=token_tracker)
     return json.loads(response)
 
 
@@ -391,6 +398,7 @@ async def stage_2_generate_timeline_scaffold_chunked(
     deal_end_date: str,
     progress_callback: Optional[ProgressCallback] = None,
     external_limiter: Optional[_OutputTokenLimiter] = None,
+    token_tracker: Optional['TokenTracker'] = None,
 ) -> List[Dict[str, Any]]:
     """
     Generate Stage 2 timeline in chunks: calls, emails, CRM notes.
@@ -401,21 +409,21 @@ async def stage_2_generate_timeline_scaffold_chunked(
 
     # Step 1: Generate call events
     call_events = await _stage_2_generate_calls(
-        stage1_json_str, config, deal_start_date, deal_end_date, limiter
+        stage1_json_str, config, deal_start_date, deal_end_date, limiter, token_tracker
     )
     if progress_callback:
         await progress_callback("stage2_calls", "Generated call events", 27)
 
     # Step 2: Generate email events (passes calls as context)
     email_events = await _stage_2_generate_emails(
-        stage1_json_str, config, deal_start_date, deal_end_date, call_events, limiter
+        stage1_json_str, config, deal_start_date, deal_end_date, call_events, limiter, token_tracker
     )
     if progress_callback:
         await progress_callback("stage2_emails", "Generated email events", 30)
 
     # Step 3: Generate CRM note events (passes calls + emails as context)
     crm_events = await _stage_2_generate_crm_notes(
-        stage1_json_str, config, deal_start_date, deal_end_date, call_events, email_events, limiter
+        stage1_json_str, config, deal_start_date, deal_end_date, call_events, email_events, limiter, token_tracker
     )
     if progress_callback:
         await progress_callback("stage2_crm", "Generated CRM note events", 33)
@@ -433,6 +441,7 @@ async def _stage_2_generate_calls(
     deal_start_date: str,
     deal_end_date: str,
     limiter: Optional[_OutputTokenLimiter] = None,
+    token_tracker: Optional['TokenTracker'] = None,
 ) -> List[Dict[str, Any]]:
     """Generate call events only."""
     prompt = STAGE_2_CALLS_PROMPT_TEMPLATE.format(
@@ -445,7 +454,7 @@ async def _stage_2_generate_calls(
         is_series=config.get('is_series', False),
     )
     try:
-        response = await call_claude(prompt, MAX_TOKENS_BY_TYPE["stage2"], limiter)
+        response = await call_claude(prompt, MAX_TOKENS_BY_TYPE["stage2"], limiter, stage="stage2_calls", token_tracker=token_tracker)
         return json.loads(response)
     except (json.JSONDecodeError, ValueError) as e:
         raise ValueError(f"Stage 2 calls chunk parse failed: {e}") from e
@@ -458,6 +467,7 @@ async def _stage_2_generate_emails(
     deal_end_date: str,
     call_events: List[Dict[str, Any]],
     limiter: Optional[_OutputTokenLimiter] = None,
+    token_tracker: Optional['TokenTracker'] = None,
 ) -> List[Dict[str, Any]]:
     """Generate email events only, with call context."""
     prompt = STAGE_2_EMAILS_PROMPT_TEMPLATE.format(
@@ -469,7 +479,7 @@ async def _stage_2_generate_emails(
         main_objection=config['main_objection'],
     )
     try:
-        response = await call_claude(prompt, MAX_TOKENS_BY_TYPE["stage2"], limiter)
+        response = await call_claude(prompt, MAX_TOKENS_BY_TYPE["stage2"], limiter, stage="stage2_emails", token_tracker=token_tracker)
         return json.loads(response)
     except (json.JSONDecodeError, ValueError) as e:
         raise ValueError(f"Stage 2 emails chunk parse failed: {e}") from e
@@ -483,6 +493,7 @@ async def _stage_2_generate_crm_notes(
     call_events: List[Dict[str, Any]],
     email_events: List[Dict[str, Any]],
     limiter: Optional[_OutputTokenLimiter] = None,
+    token_tracker: Optional['TokenTracker'] = None,
 ) -> List[Dict[str, Any]]:
     """Generate CRM note events only, with call + email context."""
     prompt = STAGE_2_CRM_NOTES_PROMPT_TEMPLATE.format(
@@ -496,7 +507,7 @@ async def _stage_2_generate_crm_notes(
         deal_outcome=config['deal_outcome'],
     )
     try:
-        response = await call_claude(prompt, MAX_TOKENS_BY_TYPE["stage2"], limiter)
+        response = await call_claude(prompt, MAX_TOKENS_BY_TYPE["stage2"], limiter, stage="stage2_crm", token_tracker=token_tracker)
         return json.loads(response)
     except (json.JSONDecodeError, ValueError) as e:
         raise ValueError(f"Stage 2 CRM notes chunk parse failed: {e}") from e
@@ -557,6 +568,7 @@ async def stage_3_generate_call_content(
     champion_entered: bool,
     system_blocks: list,
     limiter: Optional[_OutputTokenLimiter] = None,
+    token_tracker: Optional['TokenTracker'] = None,
 ) -> Dict[str, Any]:
     participants_detail = "\n".join([
         f"- {p['name']} ({p['role']})"
@@ -583,7 +595,7 @@ async def stage_3_generate_call_content(
         prior_events_summary=prior_summary,
     )
 
-    response = await call_claude_cached(system_blocks, prompt, MAX_TOKENS_BY_TYPE["call"], limiter)
+    response = await call_claude_cached(system_blocks, prompt, MAX_TOKENS_BY_TYPE["call"], limiter, stage=f"stage3_call_{event.get('title', 'untitled')}", token_tracker=token_tracker)
     content = json.loads(response)
     event.update(content)
     return event
@@ -597,6 +609,7 @@ async def stage_3_generate_email_content(
     all_events: List[Dict[str, Any]],
     system_blocks: list,
     limiter: Optional[_OutputTokenLimiter] = None,
+    token_tracker: Optional['TokenTracker'] = None,
 ) -> Dict[str, Any]:
     reply_context = ""
     if event.get('reply_to_id'):
@@ -620,7 +633,7 @@ From: {parent.get('sender', {}).get('name', '')}
         prior_events_summary=prior_summary,
     )
 
-    response = await call_claude_cached(system_blocks, prompt, MAX_TOKENS_BY_TYPE["email"], limiter)
+    response = await call_claude_cached(system_blocks, prompt, MAX_TOKENS_BY_TYPE["email"], limiter, stage=f"stage3_email_{event.get('subject', 'untitled')}", token_tracker=token_tracker)
     content = json.loads(response)
     event.update(content)
     return event
@@ -633,6 +646,7 @@ async def stage_3_generate_crm_note_content(
     prior_summary: str,
     system_blocks: list,
     limiter: Optional[_OutputTokenLimiter] = None,
+    token_tracker: Optional['TokenTracker'] = None,
 ) -> Dict[str, Any]:
     prompt = STAGE_3_CRM_NOTE_PROMPT_TEMPLATE.format(
         company_name=stage1['company']['name'],
@@ -642,7 +656,7 @@ async def stage_3_generate_crm_note_content(
         note_preview=event.get('note_preview', ''),
     )
 
-    response = await call_claude_cached(system_blocks, prompt, MAX_TOKENS_BY_TYPE["crm_note"], limiter)
+    response = await call_claude_cached(system_blocks, prompt, MAX_TOKENS_BY_TYPE["crm_note"], limiter, stage="stage3_crm_note", token_tracker=token_tracker)
     content = json.loads(response)
     event.update(content)
     return event
@@ -655,6 +669,7 @@ async def stage_3_generate_support_ticket_content(
     prior_summary: str,
     system_blocks: list,
     limiter: Optional[_OutputTokenLimiter] = None,
+    token_tracker: Optional['TokenTracker'] = None,
 ) -> Dict[str, Any]:
     """Generate support ticket description and sentiment."""
     adoption_challenge = config.get('cs_scenario', {}).get('adoption_challenge', 'unknown')
@@ -673,7 +688,7 @@ async def stage_3_generate_support_ticket_content(
         prior_support_summary=prior_summary,
     )
 
-    response = await call_claude_cached(system_blocks, prompt, MAX_TOKENS_BY_TYPE["email"], limiter)
+    response = await call_claude_cached(system_blocks, prompt, MAX_TOKENS_BY_TYPE["email"], limiter, stage=f"stage3_support_ticket_{event.get('ticket_id', 'untitled')}", token_tracker=token_tracker)
     content = json.loads(response)
     event.update(content)
     return event
@@ -686,6 +701,7 @@ async def stage_3_generate_support_call_content(
     prior_summary: str,
     system_blocks: list,
     limiter: Optional[_OutputTokenLimiter] = None,
+    token_tracker: Optional['TokenTracker'] = None,
 ) -> Dict[str, Any]:
     """Generate support call transcript and resolution."""
     adoption_challenge = config.get('cs_scenario', {}).get('adoption_challenge', 'unknown')
@@ -704,7 +720,7 @@ async def stage_3_generate_support_call_content(
         prior_support_summary=prior_summary,
     )
 
-    response = await call_claude_cached(system_blocks, prompt, MAX_TOKENS_BY_TYPE["call"], limiter)
+    response = await call_claude_cached(system_blocks, prompt, MAX_TOKENS_BY_TYPE["call"], limiter, stage=f"stage3_support_call_{event.get('support_engineer', 'untitled')}", token_tracker=token_tracker)
     content = json.loads(response)
     event.update(content)
     return event
@@ -716,6 +732,7 @@ async def stage_3_generate_all_content(
     config: Dict[str, Any],
     progress_callback: Optional[ProgressCallback] = None,
     external_limiter: Optional[_OutputTokenLimiter] = None,
+    token_tracker: Optional['TokenTracker'] = None,
 ) -> List[Dict[str, Any]]:
     """
     Stage 3: Generate content for all events with bounded concurrency.
@@ -741,15 +758,15 @@ async def stage_3_generate_all_content(
         async with semaphore:
             record_type = event['record_type']
             if record_type == 'call':
-                result = await stage_3_generate_call_content(event, stage1, config, prior_summary, champion_entered, system_blocks, limiter)
+                result = await stage_3_generate_call_content(event, stage1, config, prior_summary, champion_entered, system_blocks, limiter, token_tracker)
             elif record_type == 'email':
-                result = await stage_3_generate_email_content(event, stage1, config, prior_summary, events, system_blocks, limiter)
+                result = await stage_3_generate_email_content(event, stage1, config, prior_summary, events, system_blocks, limiter, token_tracker)
             elif record_type == 'crm_note':
-                result = await stage_3_generate_crm_note_content(event, stage1, config, prior_summary, system_blocks, limiter)
+                result = await stage_3_generate_crm_note_content(event, stage1, config, prior_summary, system_blocks, limiter, token_tracker)
             elif record_type == 'support_ticket':
-                result = await stage_3_generate_support_ticket_content(event, stage1, config, prior_summary, system_blocks, limiter)
+                result = await stage_3_generate_support_ticket_content(event, stage1, config, prior_summary, system_blocks, limiter, token_tracker)
             elif record_type == 'support_call':
-                result = await stage_3_generate_support_call_content(event, stage1, config, prior_summary, system_blocks, limiter)
+                result = await stage_3_generate_support_call_content(event, stage1, config, prior_summary, system_blocks, limiter, token_tracker)
             else:
                 result = event
 
@@ -805,7 +822,7 @@ async def generate_complete_deal(
     if progress_callback:
         await progress_callback("stage1", "Generating company profile and stakeholders...", 5)
 
-    stage1 = await stage_1_generate_foundation(config, str(deal_start_date), str(deal_end_date))
+    stage1 = await stage_1_generate_foundation(config, str(deal_start_date), str(deal_end_date), token_tracker)
     stage_1_json_str = json.dumps(stage1)
 
     # Generate CS context if enabled
@@ -839,13 +856,14 @@ async def generate_complete_deal(
             cs_start_date=cs_start,
             cs_end_date=cs_end,
             token_limiter=output_token_limiter,
+            token_tracker=token_tracker,
         )
 
     if progress_callback:
         await progress_callback("stage2", "Building deal timeline scaffold...", 25)
 
     events_scaffold = await stage_2_generate_timeline_scaffold_chunked(
-        stage1, config, str(deal_start_date), str(deal_end_date), progress_callback, output_token_limiter
+        stage1, config, str(deal_start_date), str(deal_end_date), progress_callback, output_token_limiter, token_tracker
     )
 
     # Generate CS timeline events if CS context was created in Stage 1
@@ -863,6 +881,7 @@ async def generate_complete_deal(
             cs_start_date=cs_start,
             cs_end_date=cs_end,
             token_limiter=output_token_limiter,
+            token_tracker=token_tracker,
         )
         # Merge CS events into main timeline
         events_scaffold.extend(cs_events_scaffold)
@@ -876,7 +895,7 @@ async def generate_complete_deal(
     if progress_callback:
         await progress_callback("stage3_start", f"Generating content for {len(events_scaffold)} events...", 35)
 
-    events = await stage_3_generate_all_content(events_scaffold, stage1, config, progress_callback, external_limiter)
+    events = await stage_3_generate_all_content(events_scaffold, stage1, config, progress_callback, output_token_limiter, token_tracker)
 
     if progress_callback:
         await progress_callback("saving", "Saving deal...", 96)
