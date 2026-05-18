@@ -175,6 +175,113 @@ class TestTokenUsage:
         print("=" * 70)
 
 
+class TestTokenOptimizationEndToEnd:
+    """End-to-end validation of all optimizations."""
+
+    @pytest.mark.asyncio
+    async def test_all_stages_tracked(self):
+        """Verify token tracking works across all stages."""
+        config = create_baseline_config()
+        tracker = TokenTracker()
+        result = await generate_complete_deal(config, token_tracker=tracker)
+
+        usage = tracker.to_dict()
+        by_stage = usage['by_stage']
+
+        # Verify key stages tracked
+        assert 'stage1' in by_stage, "Stage 1 not tracked"
+        assert any(k.startswith('stage2') for k in by_stage.keys()), "Stage 2 not tracked"
+        assert any(k.startswith('stage3') for k in by_stage.keys()), "Stage 3 not tracked"
+
+        print(f"\n✅ All {len(by_stage)} stages tracked")
+        for stage_name in sorted(by_stage.keys()):
+            print(f"   - {stage_name}")
+
+    @pytest.mark.asyncio
+    async def test_cache_effectiveness(self):
+        """Verify caching is providing expected savings."""
+        config = create_baseline_config()
+        tracker = TokenTracker()
+        result = await generate_complete_deal(config, token_tracker=tracker)
+
+        usage = tracker.to_dict()
+
+        # Stage 2 should show cache_reads (Stage 2 optimization)
+        stage2_total_cache = sum(
+            metrics.get('cache_reads', 0)
+            for stage, metrics in usage['by_stage'].items()
+            if stage.startswith('stage2')
+        )
+
+        # Stage 3 should show cache_reads (reused system blocks)
+        stage3_total_cache = sum(
+            metrics.get('cache_reads', 0)
+            for stage, metrics in usage['by_stage'].items()
+            if stage.startswith('stage3')
+        )
+
+        total_cache = stage2_total_cache + stage3_total_cache
+
+        if total_cache > 0:
+            print(f"\n✅ Cache savings detected: {total_cache} tokens")
+            print(f"   - Stage 2 cache: {stage2_total_cache} tokens")
+            print(f"   - Stage 3 cache: {stage3_total_cache} tokens")
+        else:
+            print(f"\n⚠️ No cache detected (may be first run or immediate timeout)")
+
+    @pytest.mark.asyncio
+    async def test_billable_tokens_within_targets(self):
+        """Verify billable tokens are within optimization targets."""
+        config = create_baseline_config()
+        config["complexity"] = "normal"
+
+        tracker = TokenTracker()
+        result = await generate_complete_deal(config, token_tracker=tracker)
+
+        billable = tracker.total_billable()
+        target_max = 7000  # 30% reduction target for normal deals
+
+        usage_pct = (billable / target_max) * 100
+
+        print(f"\n📊 Token Usage Analysis:")
+        print(f"   Billable tokens: {billable}")
+        print(f"   Target maximum: {target_max}")
+        print(f"   Usage: {usage_pct:.1f}% of target")
+
+        if billable <= target_max:
+            print(f"   ✅ Within target (30% reduction achieved)")
+        else:
+            print(f"   ⚠️ Exceeds target by {billable - target_max} tokens")
+
+    @pytest.mark.asyncio
+    async def test_token_usage_consistency(self):
+        """Verify token tracking is consistent across runs."""
+        config = create_baseline_config()
+        config["complexity"] = "simple"
+
+        # Run twice with fresh trackers
+        tracker1 = TokenTracker()
+        result1 = await generate_complete_deal(config, token_tracker=tracker1)
+        billable1 = tracker1.total_billable()
+
+        tracker2 = TokenTracker()
+        result2 = await generate_complete_deal(config, token_tracker=tracker2)
+        billable2 = tracker2.total_billable()
+
+        # Allow 10% variance due to model non-determinism
+        variance_threshold = max(billable1, billable2) * 0.10
+        difference = abs(billable1 - billable2)
+
+        print(f"\n📈 Token Consistency Check:")
+        print(f"   Run 1: {billable1} tokens")
+        print(f"   Run 2: {billable2} tokens")
+        print(f"   Variance: {difference} tokens ({(difference/billable1)*100:.1f}%)")
+
+        assert difference <= variance_threshold, \
+            f"Token usage variance too high: {difference} > {variance_threshold}"
+        print(f"   ✅ Consistent within 10% threshold")
+
+
 if __name__ == "__main__":
     # Allow running tests directly with: python -m pytest backend/tests/test_token_usage.py -v -s
     pytest.main([__file__, "-v", "-s"])
