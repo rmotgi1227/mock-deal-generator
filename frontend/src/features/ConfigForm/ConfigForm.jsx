@@ -57,6 +57,14 @@ const ConfigForm = () => {
     complexity: 'messy',
   })
 
+  const [csEnabled, setCsEnabled] = useState(false)
+  const [csData, setCsData] = useState({
+    adoption_challenge: 'integration_complexity',
+    support_contact_frequency: 'medium',
+    churn_probability: 0.5,
+    post_close_days: 30,
+  })
+
   const handleChange = (e) => {
     const { name, value } = e.target
     setFormData(prev => ({
@@ -73,7 +81,11 @@ const ConfigForm = () => {
     e.preventDefault()
     setError(null)
     try {
-      const payload = { ...formData, company_name: formData.company_name === '' ? null : formData.company_name }
+      const payload = {
+        ...formData,
+        company_name: formData.company_name === '' ? null : formData.company_name,
+        cs_scenario: csEnabled ? { enabled: true, ...csData } : null,
+      }
       const result = await generateDealStream(payload)
       navigate(`/deals/${result.deal_id}`)
     } catch (err) {
@@ -221,6 +233,76 @@ const ConfigForm = () => {
               <option value="messy">Messy</option>
             </select>
           </Field>
+
+          {/* CS Scenario Section */}
+          <div style={{ borderTop: '1px solid var(--rule)', paddingTop: '20px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: csEnabled ? '20px' : '0' }}>
+              <label style={{ ...labelStyle, marginBottom: 0 }}>Customer Success Scenario</label>
+              <button
+                type="button"
+                onClick={() => setCsEnabled(p => !p)}
+                style={{
+                  padding: '4px 12px',
+                  background: csEnabled ? 'var(--teal)' : 'var(--surface)',
+                  color: csEnabled ? '#fff' : 'var(--text-muted)',
+                  border: '1px solid',
+                  borderColor: csEnabled ? 'var(--teal)' : 'var(--rule)',
+                  borderRadius: '20px',
+                  fontFamily: 'inherit',
+                  fontSize: '12px',
+                  fontWeight: '500',
+                  cursor: 'pointer',
+                }}
+              >
+                {csEnabled ? 'Enabled' : 'Disabled'}
+              </button>
+            </div>
+
+            {csEnabled && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                  <Field label="Adoption Challenge">
+                    <select value={csData.adoption_challenge} onChange={e => setCsData(p => ({ ...p, adoption_challenge: e.target.value }))} onFocus={focusStyle} onBlur={blurStyle} style={inputStyle}>
+                      <option value="integration_complexity">Integration Complexity</option>
+                      <option value="training_gap">Training Gap</option>
+                      <option value="workflow_mismatch">Workflow Mismatch</option>
+                      <option value="performance_issues">Performance Issues</option>
+                      <option value="unclear_roi">Unclear ROI</option>
+                    </select>
+                  </Field>
+                  <Field label="Support Frequency">
+                    <select value={csData.support_contact_frequency} onChange={e => setCsData(p => ({ ...p, support_contact_frequency: e.target.value }))} onFocus={focusStyle} onBlur={blurStyle} style={inputStyle}>
+                      <option value="low">Low (2-3 interactions)</option>
+                      <option value="medium">Medium (5-7 interactions)</option>
+                      <option value="high">High (8-12 interactions)</option>
+                    </select>
+                  </Field>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                  <Field label={`Churn Probability (${Math.round(csData.churn_probability * 100)}%)`}>
+                    <input
+                      type="range"
+                      min="0" max="1" step="0.05"
+                      value={csData.churn_probability}
+                      onChange={e => setCsData(p => ({ ...p, churn_probability: parseFloat(e.target.value) }))}
+                      style={{ width: '100%', marginTop: '6px', accentColor: 'var(--teal)' }}
+                    />
+                  </Field>
+                  <Field label="Post-Close Days">
+                    <input
+                      type="number"
+                      min="7" max="180"
+                      value={csData.post_close_days}
+                      onChange={e => setCsData(p => ({ ...p, post_close_days: parseInt(e.target.value) }))}
+                      onFocus={focusStyle}
+                      onBlur={blurStyle}
+                      style={inputStyle}
+                    />
+                  </Field>
+                </div>
+              </div>
+            )}
+          </div>
 
           {loading && generationProgress > 0 && (
             <GenerationProgress progress={generationProgress} step={generationStep} onCancel={cancelGeneration} />
