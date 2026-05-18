@@ -121,6 +121,10 @@ class GenerateRequest(BaseModel):
     num_stakeholders: int = Field(..., ge=2, le=8, description="Number of stakeholders")
     complexity: ComplexityEnum = Field(..., description="Deal complexity")
     cs_scenario: Optional['CSScenario'] = Field(None, description="Customer success post-close scenario")
+    ae_name: Optional[str] = Field(None, description="Account Executive name or null to auto-generate")
+    se_name: Optional[str] = Field(None, description="Sales Engineer name or null to auto-generate")
+    business_use_case: Optional[str] = Field(None, description="Business use case (e.g. 'Automate compliance reporting')")
+    is_series: bool = Field(False, description="Whether this is a series deal starting from cold call")
 
 # ============= Internal Data Models =============
 
@@ -149,6 +153,18 @@ class SalesRep(BaseModel):
     title: str = "Account Executive"
     email: str
     vendor_company: str
+
+class SalesEngineer(BaseModel):
+    """Sales engineer — joins deal at demo/evaluation stage."""
+    name: str
+    email: str
+    vendor_company: str
+
+class FrequencyEnum(str, Enum):
+    DAILY = "daily"
+    WEEKLY = "weekly"
+    BIWEEKLY = "biweekly"
+    MONTHLY = "monthly"
 
 class Stakeholder(BaseModel):
     """Deal stakeholder."""
@@ -195,6 +211,10 @@ class DealConfig(BaseModel):
     emails_per_stage: int
     num_stakeholders: int
     complexity: ComplexityEnum
+    ae_name: Optional[str] = None
+    se_name: Optional[str] = None
+    business_use_case: Optional[str] = None
+    is_series: bool = False
 
 class DealMetadata(BaseModel):
     """Deal metadata (line 1 of NDJson file)."""
@@ -207,6 +227,7 @@ class DealMetadata(BaseModel):
     config: DealConfig
     company: Company
     sales_rep: SalesRep
+    sales_engineer: Optional['SalesEngineer'] = None
     stakeholders: List[Stakeholder]
     deal_outcome: DealOutcomeEnum
     sentiment_arc: List[SentimentArcPoint]
@@ -343,3 +364,23 @@ class SuccessResponse(BaseModel):
 class BulkGenerateRequest(BaseModel):
     """POST /api/bulk-generate-stream request body."""
     count: int = Field(..., ge=1, le=20, description="Number of random deals to generate")
+    overrides: Optional[dict] = Field(None, description="Per-variable overrides; unset fields are randomized")
+
+class SeriesRequest(BaseModel):
+    """POST /api/generate-series-stream request body."""
+    account_age_months: int = Field(..., ge=1, le=24, description="How old the account is in months")
+    frequency: FrequencyEnum = Field(..., description="Touchpoint frequency")
+    ae_name: Optional[str] = Field(None, description="Account Executive name")
+    se_name: Optional[str] = Field(None, description="Sales Engineer name")
+    business_use_case: str = Field(..., description="Business use case for this deal")
+    company_name: Optional[str] = Field(None)
+    industry: str = Field(...)
+    deal_size: str = Field(...)
+    deal_outcome: DealOutcomeEnum = Field(...)
+    complexity: ComplexityEnum = Field(...)
+    main_objection: str = Field(...)
+    buyer_urgency: BuyerUrgencyEnum = Field(...)
+    starting_sentiment: SentimentEnum = Field(...)
+    ending_sentiment: SentimentEnum = Field(...)
+    champion_entry: ChampionEntryEnum = Field(ChampionEntryEnum.AFTER_DEMO)
+    cs_scenario: Optional['CSScenario'] = Field(None)
