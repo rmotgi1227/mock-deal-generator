@@ -122,8 +122,8 @@ _FREQUENCY_CALLS = {
 
 _FREQUENCY_EMAILS = {
     "daily": 5,
-    "weekly": 3,
-    "biweekly": 2,
+    "weekly": 1,
+    "biweekly": 1,
     "monthly": 1,
 }
 
