@@ -195,10 +195,14 @@ def build_cached_system_blocks(stage1: Dict[str, Any], config: Dict[str, Any]) -
     the model's minimum cacheable prefix (4096 tokens for Haiku 4.5).
     Cache hits amortize cost across all stage-3 event calls in a deal.
     """
+    se = stage1.get('sales_engineer')
+    se_line = f"Sales Engineer: {se['name']} <{se['email']}>" if se else ""
+
     deal_context = (
         f"Deal context for this generation run:\n"
+        f"AE: {stage1['sales_rep']['name']} <{stage1['sales_rep']['email']}>\n"
+        f"{se_line}\n"
         f"Company: {json.dumps(stage1['company'])}\n"
-        f"Sales Rep: {json.dumps(stage1['sales_rep'])}\n"
         f"Stakeholders: {json.dumps(stage1['stakeholders'])}\n"
         f"Sentiment Arc: {json.dumps(stage1['sentiment_arc'])}\n"
         f"Objections: {json.dumps(stage1['objections'])}\n"
@@ -219,6 +223,10 @@ async def stage_1_generate_foundation(config: Dict[str, Any], deal_start_date: s
         else "Company Name: Auto-generate a fictional company name appropriate for the industry."
     )
 
+    ae_name_line = f"AE Name: {config.get('ae_name')}" if config.get('ae_name') else ""
+    se_name_line = f"SE Name: {config.get('se_name')}" if config.get('se_name') else ""
+    business_use_case_line = f"Business Use Case: {config.get('business_use_case')}" if config.get('business_use_case') else ""
+
     prompt = STAGE_1_PROMPT_TEMPLATE.format(
         industry=config['industry'],
         deal_size=config['deal_size'],
@@ -234,6 +242,9 @@ async def stage_1_generate_foundation(config: Dict[str, Any], deal_start_date: s
         company_name_line=company_name_line,
         deal_start_date=deal_start_date,
         deal_end_date=deal_end_date,
+        ae_name_line=ae_name_line,
+        se_name_line=se_name_line,
+        business_use_case_line=business_use_case_line,
     )
 
     response = await call_claude(prompt, MAX_TOKENS_BY_TYPE["stage1"])
@@ -326,6 +337,7 @@ async def stage_2_generate_timeline_scaffold(
         champion_entry=config['champion_entry'],
         complexity=config['complexity'],
         main_objection=config['main_objection'],
+        is_series=config.get('is_series', False),
     )
 
     response = await call_claude(prompt, MAX_TOKENS_BY_TYPE["stage2"])
@@ -753,6 +765,7 @@ async def generate_complete_deal(
         },
         'company': stage1['company'],
         'sales_rep': stage1['sales_rep'],
+        'sales_engineer': stage1.get('sales_engineer'),
         'stakeholders': stage1['stakeholders'],
         'deal_outcome': config['deal_outcome'],
         'sentiment_arc': stage1['sentiment_arc'],
