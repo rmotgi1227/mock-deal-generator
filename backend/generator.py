@@ -23,6 +23,8 @@ from prompts import (
     STAGE_3_CALL_PROMPT_TEMPLATE,
     STAGE_3_EMAIL_PROMPT_TEMPLATE,
     STAGE_3_CRM_NOTE_PROMPT_TEMPLATE,
+    STAGE_3_SUPPORT_TICKET_PROMPT_TEMPLATE,
+    STAGE_3_SUPPORT_CALL_PROMPT_TEMPLATE,
 )
 
 load_dotenv()
@@ -452,6 +454,86 @@ async def stage_3_generate_crm_note_content(
     return event
 
 
+async def stage_3_generate_support_ticket_content(
+    event: Dict[str, Any],
+    stage1: Dict[str, Any],
+    config: Dict[str, Any],
+    prior_summary: str,
+    limiter: Optional[_OutputTokenLimiter] = None,
+) -> Dict[str, Any]:
+    """Generate support ticket description and sentiment."""
+    adoption_challenge = config.get('cs_scenario', {}).get('adoption_challenge', 'unknown')
+    if hasattr(adoption_challenge, 'value'):
+        adoption_challenge = adoption_challenge.value
+
+    expected_churn_status = "expected" if config.get('expected_churn') else "unlikely"
+
+    prompt = STAGE_3_SUPPORT_TICKET_PROMPT_TEMPLATE.format(
+        company_name=stage1['company']['name'],
+        industry=stage1['company']['industry'],
+        days_since_close=30,
+        adoption_challenge=adoption_challenge,
+        expected_churn_status=expected_churn_status,
+        event_scaffold_json=json.dumps(event, indent=2),
+        prior_support_summary=prior_summary,
+    )
+
+    response = await client.messages.create(
+        model=MODEL,
+        max_tokens=MAX_TOKENS_BY_TYPE["email"],
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    if limiter:
+        await limiter.consume(response.usage.output_tokens)
+
+    content_json = _parse_claude_response(response.content[0].text)
+    content = json.loads(content_json)
+    event.update(content)
+    return event
+
+
+async def stage_3_generate_support_call_content(
+    event: Dict[str, Any],
+    stage1: Dict[str, Any],
+    config: Dict[str, Any],
+    prior_summary: str,
+    limiter: Optional[_OutputTokenLimiter] = None,
+) -> Dict[str, Any]:
+    """Generate support call transcript and resolution."""
+    adoption_challenge = config.get('cs_scenario', {}).get('adoption_challenge', 'unknown')
+    if hasattr(adoption_challenge, 'value'):
+        adoption_challenge = adoption_challenge.value
+
+    support_engineer = event.get('support_engineer', 'Support Team')
+
+    prompt = STAGE_3_SUPPORT_CALL_PROMPT_TEMPLATE.format(
+        company_name=stage1['company']['name'],
+        industry=stage1['company']['industry'],
+        adoption_challenge=adoption_challenge,
+        support_engineer=support_engineer,
+        event_scaffold_json=json.dumps(event, indent=2),
+        related_ticket_summary="",
+        prior_support_summary=prior_summary,
+    )
+
+    response = await client.messages.create(
+        model=MODEL,
+        max_tokens=MAX_TOKENS_BY_TYPE["call"],
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    if limiter:
+        await limiter.consume(response.usage.output_tokens)
+
+    content_json = _parse_claude_response(response.content[0].text)
+    content = json.loads(content_json)
+    event.update(content)
+    return event
+
+
 async def stage_3_generate_all_content(
     events: List[Dict[str, Any]],
     stage1: Dict[str, Any],
@@ -488,6 +570,10 @@ async def stage_3_generate_all_content(
                 result = await stage_3_generate_email_content(event, stage1, config, prior_summary, events, system_blocks, limiter)
             elif record_type == 'crm_note':
                 result = await stage_3_generate_crm_note_content(event, stage1, config, prior_summary, system_blocks, limiter)
+            elif record_type == 'support_ticket':
+                result = await stage_3_generate_support_ticket_content(event, stage1, config, prior_summary, limiter)
+            elif record_type == 'support_call':
+                result = await stage_3_generate_support_call_content(event, stage1, config, prior_summary, limiter)
             else:
                 result = event
 
@@ -500,6 +586,8 @@ async def stage_3_generate_all_content(
                     'call': f"call ({event.get('title', 'untitled')})",
                     'email': f"email ({event.get('subject', '')})",
                     'crm_note': 'CRM note',
+                    'support_ticket': f"support ticket ({event.get('ticket_id', '')})",
+                    'support_call': f"support call ({event.get('support_engineer', 'Support')})",
                 }.get(record_type, record_type)
                 await progress_callback(
                     f"stage3_{completed_count[0]}",
@@ -598,6 +686,11 @@ async def generate_complete_deal(
         events_scaffold.extend(cs_events_scaffold)
         events_scaffold.sort(key=lambda e: e["timestamp"])
 
+    # Add expected_churn flag to config for Stage 3 support event generation
+    if cs_context:
+        churn_date = cs_context.get("cs_context", {}).get("churn_date")
+        config['expected_churn'] = churn_date is not None
+
     if progress_callback:
         await progress_callback("stage3_start", f"Generating content for {len(events_scaffold)} events...", 35)
 
@@ -607,6 +700,9 @@ async def generate_complete_deal(
         await progress_callback("saving", "Saving deal...", 96)
 
     generated_at = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
+
+    # Count support events for metadata
+    support_events_count = len([e for e in events if e.get('record_type') in ['support_ticket', 'support_call']])
 
     metadata = {
         'record_type': 'deal_metadata',
@@ -637,6 +733,8 @@ async def generate_complete_deal(
         'sentiment_arc': stage1['sentiment_arc'],
         'stage_progression': stage1['stage_progression'],
         'objections': stage1['objections'],
+        'cs_scenario': cs_scenario.model_dump() if cs_scenario and cs_scenario.get('enabled') else None,
+        'support_events_count': support_events_count,
     }
 
     return {
