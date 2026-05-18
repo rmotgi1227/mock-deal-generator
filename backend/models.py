@@ -384,3 +384,26 @@ class SeriesRequest(BaseModel):
     ending_sentiment: SentimentEnum = Field(...)
     champion_entry: ChampionEntryEnum = Field(ChampionEntryEnum.AFTER_DEMO)
     cs_scenario: Optional['CSScenario'] = Field(None)
+
+    # Deal dynamics and timing
+    sales_cycle_velocity: Optional[str] = Field(None, description="Pace of deal progression: slow, normal, or fast")
+    procurement_delay_days: Optional[int] = Field(None, ge=0, le=60, description="Days added to procurement stage")
+    eval_iteration_count: Optional[int] = Field(None, ge=1, le=5, description="Number of evaluation cycles")
+
+    # Stakeholders and dynamics
+    number_of_decision_makers: Optional[int] = Field(None, ge=1, le=8, description="Number of people with final decision power")
+    champion_replacement: Optional[bool] = Field(False, description="Whether primary champion leaves during deal")
+
+    # Deal specifics
+    discount_percentage: Optional[float] = Field(None, ge=0.0, le=50.0, description="Deal discount as percentage")
+    win_loss_reason: Optional[str] = Field(None, description="Specific reason for win or loss")
+
+    # Customer context
+    customer_company_size: Optional[str] = Field(None, description="Customer employee count category: startup, sme, mid-market, enterprise")
+    budget_pre_allocated: Optional[bool] = Field(False, description="Whether budget was committed before deal start")
+    competing_vendors: Optional[int] = Field(None, ge=0, le=5, description="Number of competing vendors in evaluation")
+
+    # Post-sale expectations
+    time_to_value_days: Optional[int] = Field(None, ge=14, le=180, description="Expected days to realize ROI")
+    implementation_complexity: Optional[str] = Field(None, description="Post-close implementation difficulty: simple, standard, complex")
+    expansion_potential: Optional[str] = Field(None, description="Likelihood of future expansion: none, low, medium, high")
