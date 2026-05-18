@@ -190,6 +190,18 @@ const SeriesPanel = () => {
         </Field>
       </div>
 
+      {/* Champion Entry */}
+      <Field label="Champion Entry">
+        <select name="champion_entry" value={form.champion_entry} onChange={onChange} onFocus={focus} onBlur={blur} style={inputStyle}>
+          <option value="none">None</option>
+          <option value="before_discovery">Before Discovery</option>
+          <option value="during_discovery">During Discovery</option>
+          <option value="after_demo">After Demo</option>
+          <option value="during_procurement">During Procurement</option>
+          <option value="late_stage_rescue">Late Stage Rescue</option>
+        </select>
+      </Field>
+
       {loading && generationProgress > 0 && (
         <GenerationProgress progress={generationProgress} step={generationStep} onCancel={cancelGeneration} />
       )}
