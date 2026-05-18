@@ -20,6 +20,9 @@ from prompts import (
     STAGE_1_PROMPT_TEMPLATE,
     STAGE_1_CS_PROMPT_TEMPLATE,
     STAGE_2_PROMPT_TEMPLATE,
+    STAGE_2_CALLS_PROMPT_TEMPLATE,
+    STAGE_2_EMAILS_PROMPT_TEMPLATE,
+    STAGE_2_CRM_NOTES_PROMPT_TEMPLATE,
     STAGE_2_CS_PROMPT_TEMPLATE,
     STAGE_3_CALL_PROMPT_TEMPLATE,
     STAGE_3_EMAIL_PROMPT_TEMPLATE,
@@ -328,16 +331,107 @@ async def stage_2_generate_timeline_scaffold(
     deal_start_date: str,
     deal_end_date: str
 ) -> List[Dict[str, Any]]:
-    prompt = STAGE_2_PROMPT_TEMPLATE.format(
-        stage1_json=json.dumps(stage1_output),
+    """Generate Stage 2 timeline. Uses chunked approach for series/long cycles."""
+    # Use chunked approach for better reliability with large timelines
+    return await stage_2_generate_timeline_scaffold_chunked(
+        stage1_output, config, deal_start_date, deal_end_date
+    )
+
+
+async def stage_2_generate_timeline_scaffold_chunked(
+    stage1_output: Dict[str, Any],
+    config: Dict[str, Any],
+    deal_start_date: str,
+    deal_end_date: str
+) -> List[Dict[str, Any]]:
+    """
+    Generate Stage 2 timeline in chunks: calls, emails, CRM notes.
+    Returns merged, sorted array of all events.
+    """
+    stage1_json_str = json.dumps(stage1_output)
+
+    # Step 1: Generate call events
+    call_events = await _stage_2_generate_calls(
+        stage1_json_str, config, deal_start_date, deal_end_date
+    )
+
+    # Step 2: Generate email events (passes calls as context)
+    email_events = await _stage_2_generate_emails(
+        stage1_json_str, config, deal_start_date, deal_end_date, call_events
+    )
+
+    # Step 3: Generate CRM note events (passes calls + emails as context)
+    crm_events = await _stage_2_generate_crm_notes(
+        stage1_json_str, config, deal_start_date, deal_end_date, call_events, email_events
+    )
+
+    # Step 4: Merge and sort
+    all_events = call_events + email_events + crm_events
+    all_events.sort(key=lambda e: (e['date'], e['timestamp']))
+
+    return all_events
+
+
+async def _stage_2_generate_calls(
+    stage1_json: str,
+    config: Dict[str, Any],
+    deal_start_date: str,
+    deal_end_date: str
+) -> List[Dict[str, Any]]:
+    """Generate call events only."""
+    prompt = STAGE_2_CALLS_PROMPT_TEMPLATE.format(
+        stage1_json=stage1_json,
         deal_start_date=deal_start_date,
         deal_end_date=deal_end_date,
         num_calls=config['num_calls'],
-        emails_per_stage=config['emails_per_stage'],
         champion_entry=config['champion_entry'],
         complexity=config['complexity'],
-        main_objection=config['main_objection'],
         is_series=config.get('is_series', False),
+    )
+
+    response = await call_claude(prompt, MAX_TOKENS_BY_TYPE["stage2"])
+    return json.loads(response)
+
+
+async def _stage_2_generate_emails(
+    stage1_json: str,
+    config: Dict[str, Any],
+    deal_start_date: str,
+    deal_end_date: str,
+    call_events: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Generate email events only, with call context."""
+    prompt = STAGE_2_EMAILS_PROMPT_TEMPLATE.format(
+        stage1_json=stage1_json,
+        call_events_json=json.dumps(call_events),
+        deal_start_date=deal_start_date,
+        deal_end_date=deal_end_date,
+        emails_per_stage=config['emails_per_stage'],
+        main_objection=config['main_objection'],
+    )
+
+    response = await call_claude(prompt, MAX_TOKENS_BY_TYPE["stage2"])
+    return json.loads(response)
+
+
+async def _stage_2_generate_crm_notes(
+    stage1_json: str,
+    config: Dict[str, Any],
+    deal_start_date: str,
+    deal_end_date: str,
+    call_events: List[Dict[str, Any]],
+    email_events: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Generate CRM note events only, with call + email context."""
+    prompt = STAGE_2_CRM_NOTES_PROMPT_TEMPLATE.format(
+        stage1_json=stage1_json,
+        call_events_json=json.dumps(call_events),
+        email_events_json=json.dumps(email_events),
+        deal_start_date=deal_start_date,
+        deal_end_date=deal_end_date,
+        champion_entry=config['champion_entry'],
+        complexity=config['complexity'],
+        deal_outcome=config['deal_outcome'],
     )
 
     response = await call_claude(prompt, MAX_TOKENS_BY_TYPE["stage2"])
@@ -699,8 +793,8 @@ async def generate_complete_deal(
     if progress_callback:
         await progress_callback("stage2", "Building deal timeline scaffold...", 25)
 
-    events_scaffold = await stage_2_generate_timeline_scaffold(
-        stage1, config, str(deal_start_date), str(deal_end_date)
+    events_scaffold = await stage_2_generate_timeline_scaffold_chunked(
+        stage1, config, str(deal_start_date), str(deal_end_date), progress_callback, output_token_limiter
     )
 
     # Generate CS timeline events if CS context was created in Stage 1
