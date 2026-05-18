@@ -34,7 +34,7 @@ const DealView = () => {
 
   const renderCSContext = () => {
     const csScenario = currentDeal.metadata.cs_scenario
-    if (!csScenario) return null
+    if (!csScenario || !csScenario.enabled) return null
 
     const fmt = (val) => {
       if (val === null || val === undefined) return val
