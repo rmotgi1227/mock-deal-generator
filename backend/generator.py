@@ -10,26 +10,34 @@ import re
 import asyncio
 import time
 import uuid
+import logging
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Any, Optional, Callable, Awaitable
+from typing import Dict, List, Any, Optional, Callable, Awaitable, TYPE_CHECKING
 from anthropic import AsyncAnthropic
 import os
 from dotenv import load_dotenv
+
+if TYPE_CHECKING:
+    from token_tracker import TokenTracker
 from prompts import (
     SYSTEM_PROMPT,
     STAGE_1_PROMPT_TEMPLATE,
     STAGE_1_CS_PROMPT_TEMPLATE,
+    STAGE_1_CS_USER_TEMPLATE,
     STAGE_2_PROMPT_TEMPLATE,
     STAGE_2_CALLS_PROMPT_TEMPLATE,
     STAGE_2_EMAILS_PROMPT_TEMPLATE,
     STAGE_2_CRM_NOTES_PROMPT_TEMPLATE,
     STAGE_2_CS_PROMPT_TEMPLATE,
+    STAGE_2_CS_USER_TEMPLATE,
     STAGE_3_CALL_PROMPT_TEMPLATE,
     STAGE_3_EMAIL_PROMPT_TEMPLATE,
     STAGE_3_CRM_NOTE_PROMPT_TEMPLATE,
     STAGE_3_SUPPORT_TICKET_PROMPT_TEMPLATE,
     STAGE_3_SUPPORT_CALL_PROMPT_TEMPLATE,
 )
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -141,17 +149,42 @@ def _parse_claude_response(text: str) -> str:
             raise Exception(f"Claude response is not valid JSON: {str(parse_err)}\n\nFull response saved to /tmp/claude_response.json")
 
 
-async def _call_with_retry(create_kwargs: dict, max_retries: int = 4) -> tuple[str, int]:
+async def _call_with_retry(
+    create_kwargs: dict,
+    max_retries: int = 4,
+    stage: str = "unknown",
+    token_tracker: Optional['TokenTracker'] = None,
+) -> tuple[str, int, int, int, int]:
     """
-    Call Claude API with exponential backoff on 429 rate limit errors.
-    Returns (content, output_token_count).
+    Call Claude API with exponential backoff.
+    Returns (content, output_tokens, input_tokens, cache_read, cache_write).
     """
     from anthropic import RateLimitError
     delay = 5
     for attempt in range(max_retries):
         try:
             message = await client.messages.create(**create_kwargs)
-            return _parse_claude_response(message.content[0].text), message.usage.output_tokens
+            usage = message.usage
+
+            input_tokens = usage.input_tokens
+            output_tokens = usage.output_tokens
+            cache_read = getattr(usage, 'cache_read_input_tokens', 0) or 0
+            cache_write = getattr(usage, 'cache_creation_input_tokens', 0) or 0
+
+            if token_tracker:
+                token_tracker.record(
+                    stage=stage,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cache_read_tokens=cache_read,
+                    cache_write_tokens=cache_write,
+                )
+
+            logger.debug(
+                "token_usage stage=%s output=%d cache_read=%d cache_write=%d input=%d",
+                stage, output_tokens, cache_read, cache_write, input_tokens,
+            )
+            return _parse_claude_response(message.content[0].text), output_tokens, input_tokens, cache_read, cache_write
         except RateLimitError as e:
             if attempt == max_retries - 1:
                 raise
@@ -163,14 +196,16 @@ async def call_claude(
     prompt: str,
     max_tokens: int,
     limiter: Optional[_OutputTokenLimiter] = None,
+    stage: str = "unknown",
+    token_tracker: Optional['TokenTracker'] = None,
 ) -> str:
     """Call Claude with plain system prompt. Returns valid JSON string."""
-    text, output_tokens = await _call_with_retry({
+    text, output_tokens, _, _, _ = await _call_with_retry({
         "model": MODEL,
         "max_tokens": max_tokens,
         "system": SYSTEM_PROMPT,
         "messages": [{"role": "user", "content": prompt}],
-    })
+    }, stage=stage, token_tracker=token_tracker)
     if limiter:
         await limiter.consume(output_tokens)
     return text
@@ -181,28 +216,34 @@ async def call_claude_cached(
     prompt: str,
     max_tokens: int,
     limiter: Optional[_OutputTokenLimiter] = None,
+    stage: str = "unknown",
+    token_tracker: Optional['TokenTracker'] = None,
 ) -> str:
     """
     Call Claude with cached system blocks. Pass a limiter to enforce the
     output-token-per-minute budget (Tier 1: 10K/min for Haiku).
     """
-    text, output_tokens = await _call_with_retry({
+    text, output_tokens, _, _, _ = await _call_with_retry({
         "model": MODEL,
         "max_tokens": max_tokens,
         "system": system_blocks,
         "messages": [{"role": "user", "content": prompt}],
-    })
+    }, stage=stage, token_tracker=token_tracker)
     if limiter:
         await limiter.consume(output_tokens)
     return text
 
 
-def build_cached_system_blocks(stage1: Dict[str, Any], config: Dict[str, Any]) -> list:
+def build_cached_system_blocks(
+    stage1: Dict[str, Any],
+    config: Dict[str, Any],
+    events_scaffold: Optional[List[Dict[str, Any]]] = None,
+) -> list:
     """
     Build system content blocks with deal context marked for caching.
-    The combined size of SYSTEM_PROMPT + deal context needs to exceed
-    the model's minimum cacheable prefix (4096 tokens for Haiku 4.5).
-    Cache hits amortize cost across all stage-3 event calls in a deal.
+    Including events_scaffold pushes the prefix well past the 4096-token
+    minimum needed for Haiku 4.5 cache hits to activate. Without it the
+    prefix sits at ~1.5K tokens and cache writes silently fail.
     """
     se = stage1.get('sales_engineer')
     se_line = f"Sales Engineer: {se['name']} <{se['email']}>" if se else ""
@@ -219,6 +260,15 @@ def build_cached_system_blocks(stage1: Dict[str, Any], config: Dict[str, Any]) -
         f"complexity={config['complexity']}, main_objection={config['main_objection']}, "
         f"deal_outcome={config['deal_outcome']}"
     )
+
+    if events_scaffold:
+        timeline_context = f"\nDeal timeline scaffold ({len(events_scaffold)} events):\n{json.dumps(events_scaffold)}"
+        return [
+            {"type": "text", "text": SYSTEM_PROMPT},
+            {"type": "text", "text": deal_context},
+            {"type": "text", "text": timeline_context, "cache_control": {"type": "ephemeral"}},
+        ]
+
     return [
         {"type": "text", "text": SYSTEM_PROMPT},
         {"type": "text", "text": deal_context, "cache_control": {"type": "ephemeral"}},
@@ -271,8 +321,11 @@ async def generate_stage_1_cs_context(
     token_limiter: _OutputTokenLimiter,
 ) -> Dict[str, Any]:
     """Generate post-close CS context given Stage 1 foundation."""
-    prompt = STAGE_1_CS_PROMPT_TEMPLATE.format(
-        stage1_json=stage1_json,
+    cs_system_blocks = [
+        {"type": "text", "text": SYSTEM_PROMPT},
+        {"type": "text", "text": f"Deal foundation:\n{stage1_json}", "cache_control": {"type": "ephemeral"}},
+    ]
+    prompt = STAGE_1_CS_USER_TEMPLATE.format(
         adoption_challenge=adoption_challenge,
         support_contact_frequency=support_contact_frequency,
         churn_probability=churn_probability,
@@ -280,18 +333,8 @@ async def generate_stage_1_cs_context(
         cs_start_date=cs_start_date,
         cs_end_date=cs_end_date,
     )
-
-    response = await client.messages.create(
-        model=MODEL,
-        max_tokens=MAX_TOKENS_BY_TYPE["stage1"],
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    await token_limiter.consume(response.usage.output_tokens)
-
-    cs_json = _parse_claude_response(response.content[0].text)
-    return json.loads(cs_json)
+    response = await call_claude_cached(cs_system_blocks, prompt, MAX_TOKENS_BY_TYPE["stage1"], token_limiter)
+    return json.loads(response)
 
 
 async def generate_stage_2_cs_timeline(
@@ -305,10 +348,15 @@ async def generate_stage_2_cs_timeline(
     cs_end_date: str,
     token_limiter: _OutputTokenLimiter,
 ) -> List[Dict[str, Any]]:
-    """Generate support timeline scaffold given Stage 2 and CS context."""
-    prompt = STAGE_2_CS_PROMPT_TEMPLATE.format(
-        stage1_json=stage1_json,
-        stage2_json=stage2_json,
+    """Generate support timeline scaffold given Stage 2 and CS context.
+    stage1_json + stage2_json combined easily exceed 4096 tokens, so the
+    system-block cache is effective here.
+    """
+    cs_system_blocks = [
+        {"type": "text", "text": SYSTEM_PROMPT},
+        {"type": "text", "text": f"Deal foundation:\n{stage1_json}\n\nSales timeline:\n{stage2_json}", "cache_control": {"type": "ephemeral"}},
+    ]
+    prompt = STAGE_2_CS_USER_TEMPLATE.format(
         cs_context_json=json.dumps(cs_context),
         deal_close_date=deal_close_date,
         cs_start_date=cs_start_date,
@@ -317,18 +365,8 @@ async def generate_stage_2_cs_timeline(
         churn_probability=churn_probability,
         churn_date=cs_context.get("cs_context", {}).get("churn_date"),
     )
-
-    response = await client.messages.create(
-        model=MODEL,
-        max_tokens=MAX_TOKENS_BY_TYPE["stage2"],
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    await token_limiter.consume(response.usage.output_tokens)
-
-    cs_timeline_json = _parse_claude_response(response.content[0].text)
-    return json.loads(cs_timeline_json)
+    response = await call_claude_cached(cs_system_blocks, prompt, MAX_TOKENS_BY_TYPE["stage2"], token_limiter)
+    return json.loads(response)
 
 
 async def stage_2_generate_timeline_scaffold(
@@ -615,6 +653,7 @@ async def stage_3_generate_support_ticket_content(
     stage1: Dict[str, Any],
     config: Dict[str, Any],
     prior_summary: str,
+    system_blocks: list,
     limiter: Optional[_OutputTokenLimiter] = None,
 ) -> Dict[str, Any]:
     """Generate support ticket description and sentiment."""
@@ -634,18 +673,8 @@ async def stage_3_generate_support_ticket_content(
         prior_support_summary=prior_summary,
     )
 
-    response = await client.messages.create(
-        model=MODEL,
-        max_tokens=MAX_TOKENS_BY_TYPE["email"],
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    if limiter:
-        await limiter.consume(response.usage.output_tokens)
-
-    content_json = _parse_claude_response(response.content[0].text)
-    content = json.loads(content_json)
+    response = await call_claude_cached(system_blocks, prompt, MAX_TOKENS_BY_TYPE["email"], limiter)
+    content = json.loads(response)
     event.update(content)
     return event
 
@@ -655,6 +684,7 @@ async def stage_3_generate_support_call_content(
     stage1: Dict[str, Any],
     config: Dict[str, Any],
     prior_summary: str,
+    system_blocks: list,
     limiter: Optional[_OutputTokenLimiter] = None,
 ) -> Dict[str, Any]:
     """Generate support call transcript and resolution."""
@@ -674,18 +704,8 @@ async def stage_3_generate_support_call_content(
         prior_support_summary=prior_summary,
     )
 
-    response = await client.messages.create(
-        model=MODEL,
-        max_tokens=MAX_TOKENS_BY_TYPE["call"],
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    if limiter:
-        await limiter.consume(response.usage.output_tokens)
-
-    content_json = _parse_claude_response(response.content[0].text)
-    content = json.loads(content_json)
+    response = await call_claude_cached(system_blocks, prompt, MAX_TOKENS_BY_TYPE["call"], limiter)
+    content = json.loads(response)
     event.update(content)
     return event
 
@@ -704,7 +724,7 @@ async def stage_3_generate_all_content(
     the Tier-1 per-minute budget to avoid 429s.
     Pass external_limiter to share a single budget across concurrent deals.
     """
-    system_blocks = build_cached_system_blocks(stage1, config)
+    system_blocks = build_cached_system_blocks(stage1, config, events)
     semaphore = asyncio.Semaphore(2)
     limiter = external_limiter or _OutputTokenLimiter(_model_output_tpm())
     total = len(events)
@@ -727,9 +747,9 @@ async def stage_3_generate_all_content(
             elif record_type == 'crm_note':
                 result = await stage_3_generate_crm_note_content(event, stage1, config, prior_summary, system_blocks, limiter)
             elif record_type == 'support_ticket':
-                result = await stage_3_generate_support_ticket_content(event, stage1, config, prior_summary, limiter)
+                result = await stage_3_generate_support_ticket_content(event, stage1, config, prior_summary, system_blocks, limiter)
             elif record_type == 'support_call':
-                result = await stage_3_generate_support_call_content(event, stage1, config, prior_summary, limiter)
+                result = await stage_3_generate_support_call_content(event, stage1, config, prior_summary, system_blocks, limiter)
             else:
                 result = event
 
@@ -761,11 +781,16 @@ async def generate_complete_deal(
     config: Dict[str, Any],
     progress_callback: Optional[ProgressCallback] = None,
     external_limiter: Optional[_OutputTokenLimiter] = None,
+    token_tracker: Optional['TokenTracker'] = None,
 ) -> Dict[str, Any]:
     """
-    Run full 3-stage pipeline and return complete deal object.
+    Run full 3-stage pipeline and return complete deal object with token usage.
     Optional progress_callback(step, message, pct) called at each stage.
     """
+    if token_tracker is None:
+        from token_tracker import TokenTracker
+        token_tracker = TokenTracker()
+
     cs_scenario_cfg = config.get('cs_scenario')
     post_close_days = (
         cs_scenario_cfg.get('post_close_days', 30)
@@ -899,8 +924,17 @@ async def generate_complete_deal(
         'support_events_count': support_events_count,
     }
 
+    # Calculate estimated cost for token usage
+    token_usage_dict = token_tracker.to_dict()
+    cost_estimate = token_tracker.estimate_cost(
+        token_tracker.total_billable(),
+        token_tracker.total_cache_savings()
+    )
+    token_usage_dict['estimated_cost'] = cost_estimate['estimated_cost']
+
     return {
         'deal_id': deal_id,
         'metadata': metadata,
-        'events': events
+        'events': events,
+        'token_usage': token_usage_dict,
     }

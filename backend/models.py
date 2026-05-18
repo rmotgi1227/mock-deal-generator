@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict
 from enum import Enum
 
 # ============= Enums =============
@@ -407,3 +407,10 @@ class SeriesRequest(BaseModel):
     time_to_value_days: Optional[int] = Field(None, ge=14, le=180, description="Expected days to realize ROI")
     implementation_complexity: Optional[str] = Field(None, description="Post-close implementation difficulty: simple, standard, complex")
     expansion_potential: Optional[str] = Field(None, description="Likelihood of future expansion: none, low, medium, high")
+
+class TokenUsage(BaseModel):
+    """Token usage summary for a generation run."""
+    total_billable_tokens: int = Field(..., description="Total billable tokens (input + output + cache writes)")
+    total_cache_saves: int = Field(0, description="Free tokens from cache reads")
+    by_stage: Dict[str, Dict[str, int]] = Field(default_factory=dict, description="Token breakdown by stage")
+    estimated_cost: float = Field(..., description="Estimated cost at Tier-1 pricing")
