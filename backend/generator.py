@@ -827,7 +827,21 @@ async def stage_3_generate_slack_content(
     calls_summary = "\n".join([f"- {c.get('date')}: {c.get('summary', 'Call')}" for c in calls[:5]])
     emails_summary = "\n".join([f"- {e.get('date')}: {e.get('subject', 'Email')}" for e in emails[:5]])
     crm_summary = "\n".join([f"- {c.get('date')}: {c.get('title', 'Note')}" for c in crm_notes[:5]])
-    timeline_summary = f"Stage progression: {' → '.join(deal_data.get('metadata', {}).get('stage_progression', []))}"
+
+    # Extract stage names from stage progression dicts
+    stage_progression = deal_data.get('metadata', {}).get('stage_progression', [])
+    if stage_progression and isinstance(stage_progression[0], dict):
+        stage_names = [s.get('stage', '') for s in stage_progression]
+    else:
+        stage_names = stage_progression
+    timeline_summary = f"Stage progression: {' → '.join(stage_names)}"
+
+    # Extract objection texts from objection dicts
+    objections_list = deal_data["metadata"].get("objections", [])
+    if objections_list and isinstance(objections_list[0], dict):
+        objections_str = ", ".join([obj.get("text", "") for obj in objections_list]) or "None"
+    else:
+        objections_str = ", ".join(objections_list) if objections_list else "None"
 
     prompt = STAGE_3_SLACK_PROMPT_TEMPLATE.format(
         company_name=deal_data["metadata"]["company"]["name"],
@@ -835,7 +849,7 @@ async def stage_3_generate_slack_content(
         deal_size=deal_data["metadata"]["config"]["deal_size"],
         complexity_mode=deal_data["metadata"]["config"]["complexity"],
         sentiment_arc=json.dumps(deal_data["metadata"]["sentiment_arc"]),
-        objections=", ".join(deal_data["metadata"].get("objections", [])) or "None",
+        objections=objections_str,
         champion_name=next((s["name"] for s in deal_data["metadata"].get("stakeholders", []) if s.get("is_champion")), None),
         outcome=deal_data["metadata"]["deal_outcome"],
         deal_duration_days=(datetime.fromisoformat(deal_data["metadata"]["deal_end_date"]) - datetime.fromisoformat(deal_data["metadata"]["deal_start_date"])).days,
