@@ -329,7 +329,7 @@ class SlackMessage(BaseModel):
     """Slack message."""
     message_id: str  # UUID
     channel_id: str
-    sender: str  # AE, SDR, Manager, SE, Legal, CS, Rep
+    sender: Literal["AE", "SDR", "Manager", "SE", "Legal", "CS", "Rep"]
     body: str  # Casual, may include emoji
     timestamp: datetime
     reactions: Optional[List[str]] = None  # Emoji reactions
@@ -343,14 +343,13 @@ class SlackChannel(BaseModel):
     topic: str
     is_shared: bool = False  # True for rep-level channels in series mode
     created_at: datetime
-    messages: List[SlackMessage] = []
+    messages: List[SlackMessage] = Field(default_factory=list)
 
 class SlackEvent(BaseModel):
     """Slack timeline event."""
     record_type: Literal["slack_channel", "slack_message"]
     channel: Optional[SlackChannel] = None
     message: Optional[SlackMessage] = None
-    date: str  # YYYY-MM-DD
     timestamp: datetime
     stage: str  # Sales stage
 
