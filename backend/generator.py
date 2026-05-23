@@ -798,6 +798,78 @@ async def stage_3_generate_support_call_content(
     return event
 
 
+async def stage_3_generate_slack_content(
+    deal_id: str,
+    deal_data: Dict,
+    client: AsyncAnthropic,
+    max_tokens: int = 2000,
+    token_tracker: Optional['TokenTracker'] = None,
+) -> List[Dict[str, Any]]:
+    """Generate Slack channels and messages for single/bulk deals."""
+    from models import SlackEvent, SlackChannel, SlackMessage
+
+    calls = [e for e in deal_data.get("timeline_events", []) if e.get("record_type") == "call"]
+    emails = [e for e in deal_data.get("timeline_events", []) if e.get("record_type") == "email"]
+    crm_notes = [e for e in deal_data.get("timeline_events", []) if e.get("record_type") == "crm_note"]
+
+    calls_summary = "\n".join([f"- {c.get('date')}: {c.get('summary', 'Call')}" for c in calls[:5]])
+    emails_summary = "\n".join([f"- {e.get('date')}: {e.get('subject', 'Email')}" for e in emails[:5]])
+    crm_summary = "\n".join([f"- {c.get('date')}: {c.get('title', 'Note')}" for c in crm_notes[:5]])
+    timeline_summary = f"Stage progression: {' → '.join(deal_data.get('metadata', {}).get('stage_progression', []))}"
+
+    prompt = STAGE_3_SLACK_PROMPT_TEMPLATE.format(
+        company_name=deal_data["metadata"]["company"]["name"],
+        industry=deal_data["metadata"]["config"]["industry"],
+        deal_size=deal_data["metadata"]["config"]["deal_size"],
+        complexity_mode=deal_data["metadata"]["config"]["complexity"],
+        sentiment_arc=json.dumps(deal_data["metadata"]["sentiment_arc"]),
+        objections=", ".join(deal_data["metadata"].get("objections", [])) or "None",
+        champion_name=next((s["name"] for s in deal_data["metadata"].get("stakeholders", []) if s.get("is_champion")), None),
+        outcome=deal_data["metadata"]["deal_outcome"],
+        deal_duration_days=(datetime.fromisoformat(deal_data["metadata"]["deal_end_date"]) - datetime.fromisoformat(deal_data["metadata"]["deal_start_date"])).days,
+        timeline_summary=timeline_summary,
+        calls_summary=calls_summary,
+        emails_summary=emails_summary,
+        crm_summary=crm_summary,
+    )
+
+    response = await client.messages.create(
+        model=MODEL,
+        max_tokens=max_tokens,
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    slack_data = json.loads(_parse_claude_response(response.content[0].text))
+
+    slack_events = []
+    for channel in slack_data.get("channels", []):
+        slack_channel = SlackChannel(**channel)
+        slack_events.append({
+            "record_type": "slack_channel",
+            "channel": slack_channel.dict(),
+            "date": channel["created_at"].split("T")[0],
+            "timestamp": channel["created_at"],
+            "stage": deal_data.get("metadata", {}).get("current_stage", "Unknown")
+        })
+        for message in channel.get("messages", []):
+            slack_message = SlackMessage(**message)
+            slack_events.append({
+                "record_type": "slack_message",
+                "message": slack_message.dict(),
+                "date": message["timestamp"].split("T")[0],
+                "timestamp": message["timestamp"],
+                "stage": deal_data.get("metadata", {}).get("current_stage", "Unknown")
+            })
+    return slack_events
+
+
+def _insert_slack_events_into_timeline(timeline_events: List[Dict], slack_events: List[Dict]) -> List[Dict]:
+    """Insert Slack events into timeline, sorted by timestamp."""
+    merged = timeline_events + slack_events
+    merged.sort(key=lambda x: datetime.fromisoformat(x.get("timestamp", "2000-01-01T00:00:00")))
+    return merged
+
+
 async def stage_3_generate_all_content(
     events: List[Dict[str, Any]],
     stage1: Dict[str, Any],
@@ -968,6 +1040,45 @@ async def generate_complete_deal(
         await progress_callback("stage3_start", f"Generating content for {len(events_scaffold)} events...", 35)
 
     events = await stage_3_generate_all_content(events_scaffold, stage1, config, progress_callback, output_token_limiter, token_tracker)
+
+    # Generate Slack (Stage 3.5) - after timeline/emails/CRM are finalized
+    deal_data = {
+        "metadata": {
+            "deal_id": deal_id,
+            "company": stage1["company"],
+            "config": config,
+            "deal_start_date": str(deal_start_date),
+            "deal_end_date": str(deal_end_date),
+            "stage_progression": stage1.get("stage_progression", []),
+            "sentiment_arc": stage1.get("sentiment_arc", {}),
+            "objections": stage1.get("objections", []),
+            "stakeholders": stage1.get("stakeholders", []),
+            "deal_outcome": config["deal_outcome"],
+            "current_stage": config.get("current_stage", "Unknown"),
+        },
+        "timeline_events": events,
+    }
+
+    slack_events = await stage_3_generate_slack_content(
+        deal_id=deal_id,
+        deal_data=deal_data,
+        client=client,
+        token_tracker=token_tracker,
+    )
+
+    # Insert Slack events into timeline
+    events = _insert_slack_events_into_timeline(
+        events,
+        slack_events,
+    )
+
+    # Emit progress
+    if progress_callback:
+        await progress_callback(
+            "slack_generated",
+            "Slack messages generated",
+            95
+        )
 
     if progress_callback:
         await progress_callback("saving", "Saving deal...", 96)
