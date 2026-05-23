@@ -12,8 +12,8 @@ const CHAMPION_ENTRY_TO_STAGE = {
   late_stage_rescue: 'Negotiation',
 }
 
-const TabBar = ({ activeTab, setActiveTab, hasCS }) => {
-  if (!hasCS) return null
+const TabBar = ({ activeTab, setActiveTab, hasCS, hasSlack }) => {
+  if (!hasCS && !hasSlack) return null
   const tab = (id, label) => (
     <button
       onClick={() => setActiveTab(id)}
@@ -174,12 +174,14 @@ const DealTimeline = ({ deal }) => {
   const metadata = deal.metadata
   const [activeTab, setActiveTab] = useState('sales')
 
-  const { salesEvents, csEvents } = useMemo(() => ({
+  const { salesEvents, csEvents, slackEvents } = useMemo(() => ({
     salesEvents: events.filter(e => !e.record_type?.startsWith('support')),
     csEvents: events.filter(e => e.record_type?.startsWith('support')),
-  }), [events])
+    slackEvents: (deal.timeline_events || []).filter(e => e.record_type?.startsWith('slack')),
+  }), [events, deal.timeline_events])
 
   const hasCS = csEvents.length > 0
+  const hasSlack = slackEvents.length > 0
 
   return (
     <div>
@@ -187,7 +189,7 @@ const DealTimeline = ({ deal }) => {
         Timeline
       </h2>
 
-      <TabBar activeTab={activeTab} setActiveTab={setActiveTab} hasCS={hasCS} />
+      <TabBar activeTab={activeTab} setActiveTab={setActiveTab} hasCS={hasCS} hasSlack={hasSlack} />
 
       {activeTab === 'sales' && <SalesTimeline events={salesEvents} metadata={metadata} />}
       {activeTab === 'cs' && <CSTimeline events={csEvents} metadata={metadata} />}

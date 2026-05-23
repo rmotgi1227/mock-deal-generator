@@ -55,6 +55,7 @@ MAX_TOKENS_BY_TYPE = {
     "call": 2000,      # Reduced from 2500 (actual ~1800, 20% reduction)
     "email": 800,      # Reduced from 1024 (actual ~700, 21.9% reduction)
     "crm_note": 350,   # Reduced from 400 (actual ~300, 12.5% reduction)
+    "stage3_slack": 4000,  # Slack channels with multiple messages need more tokens
 }
 
 # Tier-1 output tokens per minute by model family
@@ -814,11 +815,14 @@ async def stage_3_generate_slack_content(
     deal_id: str,
     deal_data: Dict,
     client: AsyncAnthropic,
-    max_tokens: int = 2000,
+    max_tokens: int = None,
     token_tracker: Optional['TokenTracker'] = None,
 ) -> List[Dict[str, Any]]:
     """Generate Slack channels and messages for single/bulk deals."""
     from models import SlackEvent, SlackChannel, SlackMessage
+
+    if max_tokens is None:
+        max_tokens = MAX_TOKENS_BY_TYPE["stage3_slack"]
 
     calls = [e for e in deal_data.get("timeline_events", []) if e.get("record_type") == "call"]
     emails = [e for e in deal_data.get("timeline_events", []) if e.get("record_type") == "email"]
@@ -894,11 +898,14 @@ async def stage_3_generate_slack_content_series(
     deal_data: Dict,
     series_context: 'SlackContext',
     client: AsyncAnthropic,
-    max_tokens: int = 2000,
+    max_tokens: int = None,
     token_tracker: Optional['TokenTracker'] = None,
 ) -> List[Dict[str, Any]]:
     """Generate series-mode Slack with cross-deal context."""
     from models import SlackEvent, SlackChannel, SlackMessage
+
+    if max_tokens is None:
+        max_tokens = MAX_TOKENS_BY_TYPE["stage3_slack"]
 
     calls = [e for e in deal_data.get("timeline_events", []) if e.get("record_type") == "call"]
     emails = [e for e in deal_data.get("timeline_events", []) if e.get("record_type") == "email"]
