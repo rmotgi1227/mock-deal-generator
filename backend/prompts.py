@@ -593,3 +593,39 @@ Return a JSON object:
 {{
   "content": "1 to 3 sentences. Blunt, factual, first-person sales-rep voice. No formatting or bullet points. Should read like something typed quickly into Salesforce."
 }}"""
+
+# ============= STAGE 3 Slack: Channel & Message Generation =============
+
+STAGE_3_SLACK_PROMPT_TEMPLATE = """Generate internal Slack for deal: {company_name} | {industry} | {deal_size} | {complexity_mode}
+Sentiment: {sentiment_arc} | Objections: {objections} | Outcome: {outcome}
+Timeline: {timeline_summary}
+Calls: {calls_summary} | Emails: {emails_summary}
+
+Rules:
+Channels: Simple=1 (#deal-X), Normal=1-2 (#deal-X, #at-risk if objections), Messy=2-3 (#deal-X, #at-risk, #escalations)
+Senders: AE, SDR, Manager, SE, Legal, CS. Tone: casual, emoji, real facts only (names, dates, objections).
+5-15 msgs/channel. Sentiment arc: optimistic→tense→celebration/postmortem. Champion entry=reaction. Win/loss=thread.
+
+JSON: {{"channels": [{{"channel_id": "ch_uuid", "name": "", "topic": "", "is_shared": false, "created_at": "ISO", "messages": [{{"message_id": "msg_uuid", "sender": "", "body": "", "timestamp": "ISO", "reactions": [], "is_thread_reply": false, "thread_parent_id": null}}]}}]}}"""
+
+STAGE_3_SLACK_SERIES_PROMPT_TEMPLATE = """Generate Slack for rep's quarter: {rep_name}
+Deal: {current_deal_name} | {current_deal_stage} | {current_deal_outcome}
+Other deals: {other_deals_summary}
+Quarter health: {quarter_health}
+Timeline: {timeline_summary}
+
+Channels: #pipeline-[rep], #deals-at-risk (if needed), #deal-[name]
+Tone matches quarter health. 5-10 msgs in deal channel. Cross-deal refs in pipeline channel. Mark shared with is_shared: true.
+
+JSON: Same schema as single-deal."""
+
+# ============= Token Budget Configuration =============
+
+MAX_TOKENS_BY_TYPE = {
+    "stage1": 3500,
+    "stage2": 8000,
+    "call": 2000,
+    "email": 800,
+    "crm_note": 350,
+    "slack": 2000,  # NEW: Slack channels + messages
+}
