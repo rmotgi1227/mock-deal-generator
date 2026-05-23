@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Literal
 from enum import Enum
+from datetime import datetime
 
 # ============= Enums =============
 
@@ -321,6 +322,44 @@ class SupportCallEvent(BaseModel):
     resolution: str  # Call outcome (issue_resolved, escalated, etc.)
     transcript: str  # Detailed notes from the support call
     support_agent: str  # Name of support agent who took the call
+
+# ============= Slack Data Models =============
+
+class SlackMessage(BaseModel):
+    """Slack message."""
+    message_id: str  # UUID
+    channel_id: str
+    sender: str  # AE, SDR, Manager, SE, Legal, CS, Rep
+    body: str  # Casual, may include emoji
+    timestamp: datetime
+    reactions: Optional[List[str]] = None  # Emoji reactions
+    is_thread_reply: bool = False
+    thread_parent_id: Optional[str] = None
+
+class SlackChannel(BaseModel):
+    """Slack channel."""
+    channel_id: str
+    name: str  # e.g., "deal-acme-corp", "pipeline-jane-doe"
+    topic: str
+    is_shared: bool = False  # True for rep-level channels in series mode
+    created_at: datetime
+    messages: List[SlackMessage] = []
+
+class SlackEvent(BaseModel):
+    """Slack timeline event."""
+    record_type: Literal["slack_channel", "slack_message"]
+    channel: Optional[SlackChannel] = None
+    message: Optional[SlackMessage] = None
+    date: str  # YYYY-MM-DD
+    timestamp: datetime
+    stage: str  # Sales stage
+
+class SlackContext(BaseModel):
+    """Slack context for series mode."""
+    rep_name: str
+    shared_channels: List[str]
+    other_deals_summary: str
+    quarter_health: str
 
 # ============= Response Models =============
 
