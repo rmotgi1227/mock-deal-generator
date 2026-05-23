@@ -66,6 +66,7 @@ api = APIRouter(prefix="/api", dependencies=[Depends(require_api_key)])
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 @api.post("/generate-stream")
 async def generate_deal_stream(request: GenerateRequest):
