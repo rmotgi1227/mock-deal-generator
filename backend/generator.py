@@ -632,6 +632,18 @@ def get_champion_context(stage1: Dict[str, Any], champion_entered: bool, current
     return f"Champion: {champion['name']} ({champion['title']}) is actively supporting the deal internally."
 
 
+def _build_slack_series_context(current_deal_idx: int, all_deals: List[Dict], rep_name: str) -> 'SlackContext':
+    """Build cross-deal context for series Slack."""
+    from models import SlackContext
+
+    other_deals = [f"- {d['company']['name']}: {d['metadata']['current_stage']}, ${d['metadata']['deal_size']}, {d['metadata']['outcome']}" for i, d in enumerate(all_deals) if i != current_deal_idx]
+    other_deals_summary = "\n".join(other_deals) if other_deals else "No other active deals"
+    won_count = sum(1 for d in all_deals if d["metadata"]["outcome"] == "Closed Won")
+    at_risk_count = sum(1 for d in all_deals if d["metadata"]["complexity_mode"] == "Messy" or d["metadata"]["sentiment_arc"][-1] < 0.3)
+    quarter_health = "strong" if won_count >= 2 else "rough" if at_risk_count >= 2 else "average"
+    return SlackContext(rep_name=rep_name, shared_channels=[f"pipeline-{rep_name.lower().replace(' ', '-')}", "deals-at-risk"], other_deals_summary=other_deals_summary, quarter_health=quarter_health)
+
+
 async def stage_3_generate_call_content(
     event: Dict[str, Any],
     stage1: Dict[str, Any],
@@ -863,6 +875,64 @@ async def stage_3_generate_slack_content(
     return slack_events
 
 
+async def stage_3_generate_slack_content_series(
+    deal_id: str,
+    deal_data: Dict,
+    series_context: 'SlackContext',
+    client: AsyncAnthropic,
+    max_tokens: int = 2000,
+    token_tracker: Optional['TokenTracker'] = None,
+) -> List[Dict[str, Any]]:
+    """Generate series-mode Slack with cross-deal context."""
+    from models import SlackEvent, SlackChannel, SlackMessage
+
+    calls = [e for e in deal_data.get("timeline_events", []) if e.get("record_type") == "call"]
+    emails = [e for e in deal_data.get("timeline_events", []) if e.get("record_type") == "email"]
+    calls_summary = "\n".join([f"- {c.get('date')}: {c.get('summary', 'Call')}" for c in calls[:3]])
+    emails_summary = "\n".join([f"- {e.get('date')}: {e.get('subject', 'Email')}" for e in emails[:3]])
+    timeline_summary = f"{calls_summary}\n{emails_summary}"
+
+    prompt = STAGE_3_SLACK_SERIES_PROMPT_TEMPLATE.format(
+        rep_name=series_context.rep_name,
+        current_deal_name=deal_data["company"]["name"],
+        current_deal_stage=deal_data["metadata"]["current_stage"],
+        current_deal_outcome=deal_data["metadata"]["outcome"],
+        current_deal_complexity=deal_data["metadata"]["complexity_mode"],
+        other_deals_summary=series_context.other_deals_summary,
+        quarter_health=series_context.quarter_health,
+        timeline_summary=timeline_summary
+    )
+
+    response = await client.messages.create(
+        model=MODEL,
+        max_tokens=max_tokens,
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    slack_data = json.loads(_parse_claude_response(response.content[0].text))
+
+    slack_events = []
+    for channel in slack_data.get("channels", []):
+        slack_channel = SlackChannel(**channel)
+        slack_events.append({
+            "record_type": "slack_channel",
+            "channel": slack_channel.dict(),
+            "date": channel["created_at"].split("T")[0],
+            "timestamp": channel["created_at"],
+            "stage": deal_data.get("metadata", {}).get("current_stage", "Unknown")
+        })
+        for message in channel.get("messages", []):
+            slack_message = SlackMessage(**message)
+            slack_events.append({
+                "record_type": "slack_message",
+                "message": slack_message.dict(),
+                "date": message["timestamp"].split("T")[0],
+                "timestamp": message["timestamp"],
+                "stage": deal_data.get("metadata", {}).get("current_stage", "Unknown")
+            })
+    return slack_events
+
+
 def _insert_slack_events_into_timeline(timeline_events: List[Dict], slack_events: List[Dict]) -> List[Dict]:
     """Insert Slack events into timeline, sorted by timestamp."""
     merged = timeline_events + slack_events
@@ -1055,16 +1125,32 @@ async def generate_complete_deal(
             "stakeholders": stage1.get("stakeholders", []),
             "deal_outcome": config["deal_outcome"],
             "current_stage": config.get("current_stage", "Unknown"),
+            "complexity_mode": config.get("complexity", "Unknown"),
+            "outcome": config["deal_outcome"],
+            "deal_size": config["deal_size"],
         },
         "timeline_events": events,
     }
 
-    slack_events = await stage_3_generate_slack_content(
-        deal_id=deal_id,
-        deal_data=deal_data,
-        client=client,
-        token_tracker=token_tracker,
-    )
+    # Generate Slack content (series mode or standard)
+    if config.get("is_series", False):
+        # Series mode: use cross-deal context
+        series_context = _build_slack_series_context(0, [deal_data], stage1["sales_rep"]["name"])
+        slack_events = await stage_3_generate_slack_content_series(
+            deal_id=deal_id,
+            deal_data=deal_data,
+            series_context=series_context,
+            client=client,
+            token_tracker=token_tracker,
+        )
+    else:
+        # Standard mode: single deal context
+        slack_events = await stage_3_generate_slack_content(
+            deal_id=deal_id,
+            deal_data=deal_data,
+            client=client,
+            token_tracker=token_tracker,
+        )
 
     # Insert Slack events into timeline
     events = _insert_slack_events_into_timeline(
