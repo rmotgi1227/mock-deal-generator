@@ -78,7 +78,12 @@ export const DealProvider = ({ children }) => {
 
       throw new Error('Stream ended without completion event')
     } catch (err) {
-      if (err.name === 'AbortError') return
+      if (err.name === 'AbortError') {
+        setLoading(false)
+        setGenerationProgress(0)
+        setGenerationStep('')
+        return
+      }
       const errorMsg = err.message || 'Generation failed'
       setError(errorMsg)
       setLoading(false)
@@ -148,7 +153,12 @@ export const DealProvider = ({ children }) => {
 
       throw new Error('Stream ended without completion event')
     } catch (err) {
-      if (err.name === 'AbortError') return
+      if (err.name === 'AbortError') {
+        setLoading(false)
+        setGenerationProgress(0)
+        setGenerationStep('')
+        return
+      }
       const errorMsg = err.message || 'Generation failed'
       setError(errorMsg)
       setLoading(false)
@@ -247,7 +257,11 @@ export const DealProvider = ({ children }) => {
         }
       }
     } catch (err) {
-      if (err.name === 'AbortError') return
+      if (err.name === 'AbortError') {
+        setBulkLoading(false)
+        setBulkProgress({ completed: 0, failed: 0, total: 0 })
+        return
+      }
       setBulkLoading(false)
       throw err
     }
