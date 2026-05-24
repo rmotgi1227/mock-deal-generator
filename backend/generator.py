@@ -525,8 +525,12 @@ async def _stage_2_generate_emails(
         {"type": "text", "text": f"Deal foundation:\n{stage1_json}", "cache_control": {"type": "ephemeral"}},
     ]
 
+    calls_summary = "\n".join(
+        f"- [{e.get('date')}] {e.get('call_type','call')}: {e.get('title','Call')} (stage={e.get('stage')})"
+        for e in call_events
+    )
     prompt = STAGE_2_EMAILS_PROMPT_TEMPLATE.format(
-        call_events_json=json.dumps(call_events),
+        call_events_json=calls_summary,
         deal_start_date=deal_start_date,
         deal_end_date=deal_end_date,
         emails_per_stage=config['emails_per_stage'],
@@ -562,9 +566,17 @@ async def _stage_2_generate_crm_notes(
         {"type": "text", "text": f"Deal foundation:\n{stage1_json}", "cache_control": {"type": "ephemeral"}},
     ]
 
+    calls_summary = "\n".join(
+        f"- [{e.get('date')}] call: {e.get('title','Call')} (stage={e.get('stage')})"
+        for e in call_events
+    )
+    emails_summary = "\n".join(
+        f"- [{e.get('date')}] email: {e.get('subject','Email')} (stage={e.get('stage')})"
+        for e in email_events
+    )
     prompt = STAGE_2_CRM_NOTES_PROMPT_TEMPLATE.format(
-        call_events_json=json.dumps(call_events),
-        email_events_json=json.dumps(email_events),
+        call_events_json=calls_summary,
+        email_events_json=emails_summary,
         deal_start_date=deal_start_date,
         deal_end_date=deal_end_date,
         champion_entry=config['champion_entry'],
