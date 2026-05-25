@@ -60,12 +60,12 @@ def generate_random_config(overrides: Optional[dict] = None) -> dict:
     # Heavier deals get more calls/emails/stakeholders
     if complexity == "messy":
         num_calls = random.randint(4, 10)
-        emails_per_stage = random.randint(2, 5)
+        emails_per_stage = random.randint(2, 3)
         num_stakeholders = random.randint(4, 8)
         sales_cycle = random.randint(60, 180)
     elif complexity == "normal":
         num_calls = random.randint(3, 7)
-        emails_per_stage = random.randint(2, 4)
+        emails_per_stage = random.randint(1, 3)
         num_stakeholders = random.randint(3, 6)
         sales_cycle = random.randint(30, 90)
     else:

@@ -168,6 +168,14 @@ async def _call_with_retry(
     for attempt in range(max_retries):
         try:
             message = await client.messages.create(**create_kwargs)
+
+            if message.stop_reason == "max_tokens":
+                raise ValueError(
+                    f"Response truncated at max_tokens limit in stage={stage}. "
+                    f"Output exceeded {create_kwargs.get('max_tokens', '?')} tokens. "
+                    f"Try reducing deal complexity (fewer calls/emails/stakeholders)."
+                )
+
             usage = message.usage
 
             input_tokens = usage.input_tokens

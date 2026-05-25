@@ -3,7 +3,7 @@ FastAPI application for Ycrest Mock Deal Generator.
 6 endpoints: POST /generate-stream, POST /generate-series-stream, POST /bulk-generate-stream, GET /deals, GET /deals/{id}, DELETE /deals/{id}
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import asyncio
@@ -38,19 +38,37 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Add CORS middleware to allow frontend at http://localhost:5173 and 5174
+# CORS: allow all origins in production (Ycrest and frontend can be deployed anywhere).
+# Set ALLOWED_ORIGINS to a comma-separated list to restrict (e.g. "https://myapp.up.railway.app").
+_raw_origins = os.getenv("ALLOWED_ORIGINS", "*")
+_allow_all = _raw_origins.strip() == "*"
+_origins = ["*"] if _allow_all else [o.strip() for o in _raw_origins.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174"],
+    allow_origins=_origins,
+    allow_credentials=not _allow_all,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# API key auth — all /api/* routes require X-API-Key header matching API_KEY env var.
+_API_KEY = os.getenv("API_KEY", "")
+
+async def require_api_key(request: Request):
+    if not _API_KEY:
+        raise HTTPException(status_code=500, detail="API_KEY not configured on server")
+    if request.headers.get("X-API-Key") != _API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
+
+api = APIRouter(prefix="/api", dependencies=[Depends(require_api_key)])
+
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
-@app.post("/api/generate-stream")
+@api.post("/generate-stream")
 async def generate_deal_stream(request: GenerateRequest):
     """
     POST /api/generate-stream
@@ -109,7 +127,7 @@ async def generate_deal_stream(request: GenerateRequest):
         }
     )
 
-@app.post("/api/generate-series-stream")
+@api.post("/generate-series-stream")
 async def generate_series_stream(request: SeriesRequest):
     """
     POST /api/generate-series-stream
@@ -155,7 +173,7 @@ async def generate_series_stream(request: SeriesRequest):
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"}
     )
 
-@app.post("/api/generate", response_model=GenerateResponse)
+@api.post("/generate", response_model=GenerateResponse)
 async def generate_deal(request: GenerateRequest):
     """
     POST /api/generate
@@ -199,7 +217,7 @@ async def generate_deal(request: GenerateRequest):
         logger.error(f"Generation failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
 
-@app.get("/api/deals", response_model=DealsListResponse)
+@api.get("/deals", response_model=DealsListResponse)
 async def list_deals():
     """
     GET /api/deals
@@ -213,7 +231,7 @@ async def list_deals():
         logger.error(f"Failed to list deals: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to list deals: {str(e)}")
 
-@app.get("/api/deals/{deal_id}", response_model=DealResponse)
+@api.get("/deals/{deal_id}", response_model=DealResponse)
 async def get_deal(deal_id: str):
     """
     GET /api/deals/{deal_id}
@@ -243,7 +261,7 @@ async def get_deal(deal_id: str):
         logger.error(f"Failed to get deal {deal_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to get deal: {str(e)}")
 
-@app.delete("/api/deals/{deal_id}", response_model=SuccessResponse)
+@api.delete("/deals/{deal_id}", response_model=SuccessResponse)
 async def delete_deal_endpoint(deal_id: str):
     """
     DELETE /api/deals/{deal_id}
@@ -258,7 +276,7 @@ async def delete_deal_endpoint(deal_id: str):
         logger.error(f"Failed to delete deal {deal_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to delete deal: {str(e)}")
 
-@app.post("/api/bulk-generate-stream")
+@api.post("/bulk-generate-stream")
 async def bulk_generate_stream(request: BulkGenerateRequest):
     """
     POST /api/bulk-generate-stream
@@ -330,13 +348,12 @@ async def bulk_generate_stream(request: BulkGenerateRequest):
     )
 
 
+app.include_router(api)
+
+
 @app.get("/")
 async def root():
-    """Root endpoint."""
-    return {
-        "message": "Ycrest Mock Deal Generator API",
-        "docs": "http://localhost:8000/docs"
-    }
+    return {"message": "Ycrest Mock Deal Generator API", "docs": "/docs"}
 
 if __name__ == "__main__":
     import uvicorn
