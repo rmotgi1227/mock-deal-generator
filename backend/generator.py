@@ -859,7 +859,7 @@ async def stage_3_generate_slack_content(
     token_tracker: Optional['TokenTracker'] = None,
 ) -> List[Dict[str, Any]]:
     """Generate Slack channels and messages for single/bulk deals."""
-    from models import SlackChannel, SlackMessage
+    from models import SlackChannel
 
     if max_tokens is None:
         max_tokens = MAX_TOKENS_BY_TYPE["stage3_slack"]
@@ -910,22 +910,15 @@ async def stage_3_generate_slack_content(
     slack_events = []
     for channel in channels:
         slack_channel = SlackChannel(**channel)
+        channel_dump = slack_channel.model_dump(mode='json')
+        ts = channel_dump.get("created_at", "2000-01-01T00:00:00")
         slack_events.append({
             "record_type": "slack_channel",
-            "channel": slack_channel.model_dump(mode='json'),
-            "date": channel["created_at"].split("T")[0],
-            "timestamp": channel["created_at"],
+            "channel": channel_dump,
+            "date": ts.split("T")[0] if "T" in str(ts) else str(ts)[:10],
+            "timestamp": ts,
             "stage": deal_data.get("metadata", {}).get("current_stage", "Unknown")
         })
-        for message in channel.get("messages", []):
-            slack_message = SlackMessage(**message)
-            slack_events.append({
-                "record_type": "slack_message",
-                "message": slack_message.model_dump(mode='json'),
-                "date": message["timestamp"].split("T")[0],
-                "timestamp": message["timestamp"],
-                "stage": deal_data.get("metadata", {}).get("current_stage", "Unknown")
-            })
     return slack_events
 
 
@@ -938,7 +931,7 @@ async def stage_3_generate_slack_content_series(
     token_tracker: Optional['TokenTracker'] = None,
 ) -> List[Dict[str, Any]]:
     """Generate series-mode Slack content."""
-    from models import SlackChannel, SlackMessage
+    from models import SlackChannel
 
     if max_tokens is None:
         max_tokens = MAX_TOKENS_BY_TYPE["stage3_slack"]
@@ -968,29 +961,33 @@ async def stage_3_generate_slack_content_series(
     slack_events = []
     for channel in channels:
         slack_channel = SlackChannel(**channel)
+        channel_dump = slack_channel.model_dump(mode='json')
+        ts = channel_dump.get("created_at", "2000-01-01T00:00:00")
         slack_events.append({
             "record_type": "slack_channel",
-            "channel": slack_channel.model_dump(mode='json'),
-            "date": channel["created_at"].split("T")[0],
-            "timestamp": channel["created_at"],
+            "channel": channel_dump,
+            "date": ts.split("T")[0] if "T" in str(ts) else str(ts)[:10],
+            "timestamp": ts,
             "stage": deal_data.get("metadata", {}).get("current_stage", "Unknown")
         })
-        for message in channel.get("messages", []):
-            slack_message = SlackMessage(**message)
-            slack_events.append({
-                "record_type": "slack_message",
-                "message": slack_message.model_dump(mode='json'),
-                "date": message["timestamp"].split("T")[0],
-                "timestamp": message["timestamp"],
-                "stage": deal_data.get("metadata", {}).get("current_stage", "Unknown")
-            })
     return slack_events
+
+
+def _parse_sort_ts(ts: str) -> datetime:
+    """Parse and normalize timestamp to UTC naive datetime for consistent sorting."""
+    try:
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt
+    except (ValueError, AttributeError, TypeError):
+        return datetime(2000, 1, 1)
 
 
 def _insert_slack_events_into_timeline(timeline_events: List[Dict], slack_events: List[Dict]) -> List[Dict]:
     """Insert Slack events into timeline, sorted by timestamp."""
     merged = timeline_events + slack_events
-    merged.sort(key=lambda x: x.get("timestamp", "2000-01-01T00:00:00"))
+    merged.sort(key=lambda x: _parse_sort_ts(x.get("timestamp", "")))
     return merged
 
 
