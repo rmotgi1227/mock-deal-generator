@@ -1198,17 +1198,13 @@ async def generate_complete_deal(
                 token_tracker=token_tracker,
             )
         events = _insert_slack_events_into_timeline(events, slack_events)
+        if progress_callback:
+            await progress_callback("slack_generated", "Slack messages generated", 95)
     except Exception as slack_err:
         logger.error("Slack generation failed, continuing without Slack events: %s", slack_err)
         slack_events = []
-
-    # Emit progress
-    if progress_callback:
-        await progress_callback(
-            "slack_generated",
-            "Slack messages generated",
-            95
-        )
+        if progress_callback:
+            await progress_callback("slack_failed", "Slack generation failed, continuing without Slack", 95)
 
     if progress_callback:
         await progress_callback("saving", "Saving deal...", 96)
