@@ -88,6 +88,8 @@ class RecordTypeEnum(str, Enum):
     DEAL_METADATA = "deal_metadata"
     SUPPORT_TICKET = "support_ticket"
     SUPPORT_CALL = "support_call"
+    SLACK_CHANNEL = "slack_channel"
+    SLACK_MESSAGE = "slack_message"
 
 class SupportLevelEnum(str, Enum):
     """Stakeholder support level."""

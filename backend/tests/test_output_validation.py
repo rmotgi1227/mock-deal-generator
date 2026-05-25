@@ -30,7 +30,8 @@ def validate_event_quality(event):
     """Validate that an event has quality content."""
     assert "record_type" in event, f"Event missing record_type: {event}"
     assert event["record_type"] in [
-        "call", "email", "crm_note", "support_ticket", "support_call"
+        "call", "email", "crm_note", "support_ticket", "support_call",
+        "slack_channel", "slack_message"
     ], f"Unknown record_type: {event['record_type']}"
 
     # Type-specific validation
@@ -60,6 +61,12 @@ def validate_event_quality(event):
     elif record_type == "support_call":
         assert "summary" in event, "Support call missing summary"
         assert len(event["summary"].strip()) > 50, "Support call summary too short"
+
+    elif record_type == "slack_channel":
+        assert "channel" in event, "Slack channel missing channel data"
+
+    elif record_type == "slack_message":
+        assert "message" in event, "Slack message missing message data"
 
     return True
 
