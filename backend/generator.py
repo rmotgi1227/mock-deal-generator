@@ -1000,7 +1000,7 @@ async def stage_3_generate_slack_content_series(
 def _insert_slack_events_into_timeline(timeline_events: List[Dict], slack_events: List[Dict]) -> List[Dict]:
     """Insert Slack events into timeline, sorted by timestamp."""
     merged = timeline_events + slack_events
-    merged.sort(key=lambda x: datetime.fromisoformat(x.get("timestamp", "2000-01-01T00:00:00")))
+    merged.sort(key=lambda x: x.get("timestamp", "2000-01-01T00:00:00"))
     return merged
 
 
@@ -1216,15 +1216,10 @@ async def generate_complete_deal(
                 client=client,
                 token_tracker=token_tracker,
             )
+        events = _insert_slack_events_into_timeline(events, slack_events)
     except Exception as slack_err:
         logger.error("Slack generation failed, continuing without Slack events: %s", slack_err)
         slack_events = []
-
-    # Insert Slack events into timeline
-    events = _insert_slack_events_into_timeline(
-        events,
-        slack_events,
-    )
 
     # Emit progress
     if progress_callback:
