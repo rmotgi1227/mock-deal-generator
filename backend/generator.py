@@ -663,26 +663,22 @@ def _derive_current_stage(stage_progression: list, deal_outcome: str) -> str:
     return str(last)
 
 
-def _build_slack_series_context(current_deal_idx: int, all_deals: List[Dict], rep_name: str) -> 'SlackContext':
-    """Build cross-deal context for series Slack."""
-    from models import SlackContext
-
-    other_deals = [f"- {d['metadata']['company']['name']}: {d['metadata']['current_stage']}, ${d['metadata']['deal_size']}, {d['metadata']['outcome']}" for i, d in enumerate(all_deals) if i != current_deal_idx]
-    other_deals_summary = "\n".join(other_deals) if other_deals else "No other active deals"
+def _slack_quarter_health(deal_data: Dict) -> str:
+    """Derive quarter health label from a single deal's outcome and sentiment."""
     _SENTIMENT_SCORE = {"positive": 0.8, "neutral": 0.5, "concerned": 0.25, "negative": 0.1}
-
-    def _last_sentiment_score(arc):
-        if not arc:
-            return 0.5
-        last = arc[-1]
-        if isinstance(last, dict):
-            return _SENTIMENT_SCORE.get(last.get("sentiment", "neutral"), 0.5)
-        return float(last) if isinstance(last, (int, float)) else 0.5
-
-    won_count = sum(1 for d in all_deals if d["metadata"]["outcome"] == "closed_won")
-    at_risk_count = sum(1 for d in all_deals if d["metadata"]["complexity_mode"] == "messy" or _last_sentiment_score(d["metadata"].get("sentiment_arc", [])) < 0.3)
-    quarter_health = "strong" if won_count >= 2 else "rough" if at_risk_count >= 2 else "average"
-    return SlackContext(rep_name=rep_name, shared_channels=[f"pipeline-{rep_name.lower().replace(' ', '-')}", "deals-at-risk"], other_deals_summary=other_deals_summary, quarter_health=quarter_health)
+    arc = deal_data["metadata"].get("sentiment_arc", [])
+    last = arc[-1] if arc else None
+    if isinstance(last, dict):
+        last_score = _SENTIMENT_SCORE.get(last.get("sentiment", "neutral"), 0.5)
+    elif isinstance(last, (int, float)):
+        last_score = float(last)
+    else:
+        last_score = 0.5
+    if deal_data["metadata"].get("outcome") == "closed_won":
+        return "strong"
+    if deal_data["metadata"].get("complexity_mode") == "messy" or last_score < 0.3:
+        return "rough"
+    return "average"
 
 
 async def stage_3_generate_call_content(
@@ -931,12 +927,12 @@ async def stage_3_generate_slack_content(
 async def stage_3_generate_slack_content_series(
     deal_id: str,
     deal_data: Dict,
-    series_context: 'SlackContext',
+    rep_name: str,
     max_tokens: int = None,
     token_tracker: Optional['TokenTracker'] = None,
 ) -> List[Dict[str, Any]]:
-    """Generate series-mode Slack with cross-deal context."""
-    from models import SlackEvent, SlackChannel, SlackMessage
+    """Generate series-mode Slack content."""
+    from models import SlackChannel, SlackMessage
 
     if max_tokens is None:
         max_tokens = MAX_TOKENS_BY_TYPE["stage3_slack"]
@@ -950,12 +946,12 @@ async def stage_3_generate_slack_content_series(
     se_name = deal_data["metadata"].get("sales_engineer", {}).get("name", "SE") if deal_data["metadata"].get("sales_engineer") else "SE"
 
     prompt = STAGE_3_SLACK_SERIES_PROMPT_TEMPLATE.format(
-        rep_name=series_context.rep_name,
+        rep_name=rep_name,
         se_name=se_name,
         current_deal_name=deal_data["metadata"]["company"]["name"],
         current_deal_stage=deal_data["metadata"]["current_stage"],
         current_deal_outcome=deal_data["metadata"]["outcome"],
-        quarter_health=series_context.quarter_health,
+        quarter_health=_slack_quarter_health(deal_data),
         timeline_summary=timeline_summary
     )
 
@@ -1189,11 +1185,10 @@ async def generate_complete_deal(
     # Generate Slack content (series mode or standard)
     try:
         if config.get("is_series", False):
-            series_context = _build_slack_series_context(0, [deal_data], stage1["sales_rep"]["name"])
             slack_events = await stage_3_generate_slack_content_series(
                 deal_id=deal_id,
                 deal_data=deal_data,
-                series_context=series_context,
+                rep_name=stage1["sales_rep"]["name"],
                 token_tracker=token_tracker,
             )
         else:
