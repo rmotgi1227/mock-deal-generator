@@ -48,6 +48,8 @@ MODEL = os.environ.get("CLAUDE_MODEL", "claude-haiku-4-5")
 # Max tokens per event type — tuned to actual output needs
 # Based on token usage measurements: actual usage is 60-80% of limits
 # Reduced allocations by 12-21% to optimize token consumption while maintaining quality
+_SENTIMENT_SCORE = {"positive": 0.8, "neutral": 0.5, "concerned": 0.25, "negative": 0.1}
+
 MAX_TOKENS_BY_TYPE = {
     "stage1": 3500,    # Reduced from 4096 (actual ~3200, 14.5% reduction)
     "stage2": 12000,   # Increased for series deals with more events
@@ -665,7 +667,6 @@ def _derive_current_stage(stage_progression: list, deal_outcome: str) -> str:
 
 def _slack_quarter_health(deal_data: Dict) -> str:
     """Derive quarter health label from a single deal's outcome and sentiment."""
-    _SENTIMENT_SCORE = {"positive": 0.8, "neutral": 0.5, "concerned": 0.25, "negative": 0.1}
     arc = deal_data["metadata"].get("sentiment_arc", [])
     last = arc[-1] if arc else None
     if isinstance(last, dict):
@@ -674,10 +675,10 @@ def _slack_quarter_health(deal_data: Dict) -> str:
         last_score = float(last)
     else:
         last_score = 0.5
-    if deal_data["metadata"].get("outcome") == "closed_won":
-        return "strong"
     if deal_data["metadata"].get("complexity_mode") == "messy" or last_score < 0.3:
         return "rough"
+    if deal_data["metadata"].get("outcome") == "closed_won":
+        return "strong"
     return "average"
 
 
@@ -851,6 +852,7 @@ async def stage_3_generate_slack_content(
     deal_id: str,
     deal_data: Dict,
     max_tokens: int = None,
+    limiter: Optional[_OutputTokenLimiter] = None,
     token_tracker: Optional['TokenTracker'] = None,
 ) -> List[Dict[str, Any]]:
     """Generate Slack channels and messages for single/bulk deals."""
@@ -898,7 +900,7 @@ async def stage_3_generate_slack_content(
         emails_summary=emails_summary,
     )
 
-    text = await call_claude(prompt, max_tokens, stage="stage3_slack", token_tracker=token_tracker)
+    text = await call_claude(prompt, max_tokens, limiter=limiter, stage="stage3_slack", token_tracker=token_tracker)
     slack_data = json.loads(text)
     channels = slack_data if isinstance(slack_data, list) else slack_data.get("channels", [])
 
@@ -929,6 +931,7 @@ async def stage_3_generate_slack_content_series(
     deal_data: Dict,
     rep_name: str,
     max_tokens: int = None,
+    limiter: Optional[_OutputTokenLimiter] = None,
     token_tracker: Optional['TokenTracker'] = None,
 ) -> List[Dict[str, Any]]:
     """Generate series-mode Slack content."""
@@ -939,8 +942,8 @@ async def stage_3_generate_slack_content_series(
 
     calls = [e for e in deal_data.get("timeline_events", deal_data.get("events", [])) if e.get("record_type") == "call"]
     emails = [e for e in deal_data.get("timeline_events", deal_data.get("events", [])) if e.get("record_type") == "email"]
-    calls_summary = "\n".join([f"- {c.get('date')}: {c.get('summary', 'Call')}" for c in calls[:3]])
-    emails_summary = "\n".join([f"- {e.get('date')}: {e.get('subject', 'Email')}" for e in emails[:3]])
+    calls_summary = "\n".join([f"- {c.get('date')}: {c.get('summary', 'Call')}" for c in calls[:5]])
+    emails_summary = "\n".join([f"- {e.get('date')}: {e.get('subject', 'Email')}" for e in emails[:5]])
     timeline_summary = f"{calls_summary}\n{emails_summary}"
 
     se_name = deal_data["metadata"].get("sales_engineer", {}).get("name", "SE") if deal_data["metadata"].get("sales_engineer") else "SE"
@@ -955,7 +958,7 @@ async def stage_3_generate_slack_content_series(
         timeline_summary=timeline_summary
     )
 
-    text = await call_claude(prompt, max_tokens, stage="stage3_slack_series", token_tracker=token_tracker)
+    text = await call_claude(prompt, max_tokens, limiter=limiter, stage="stage3_slack_series", token_tracker=token_tracker)
     slack_data = json.loads(text)
     channels = slack_data if isinstance(slack_data, list) else slack_data.get("channels", [])
 
@@ -1189,12 +1192,14 @@ async def generate_complete_deal(
                 deal_id=deal_id,
                 deal_data=deal_data,
                 rep_name=stage1["sales_rep"]["name"],
+                limiter=output_token_limiter,
                 token_tracker=token_tracker,
             )
         else:
             slack_events = await stage_3_generate_slack_content(
                 deal_id=deal_id,
                 deal_data=deal_data,
+                limiter=output_token_limiter,
                 token_tracker=token_tracker,
             )
         events = _insert_slack_events_into_timeline(events, slack_events)
