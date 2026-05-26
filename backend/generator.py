@@ -1067,8 +1067,10 @@ def _detect_sentiment_transitions(calls: List[Dict[str, Any]]) -> List[Dict[str,
             severity = "minor"
         elif {curr_sentiment, prior_sentiment} == {"positive", "concerned"}:
             severity = "minor"
-        # Major shifts: concerned<->negative
+        # Major shifts: concerned<->negative, or a direct positive<->negative swing
         elif {curr_sentiment, prior_sentiment} == {"concerned", "negative"}:
+            severity = "major"
+        elif {curr_sentiment, prior_sentiment} == {"positive", "negative"}:
             severity = "major"
 
         transition = {
@@ -1121,6 +1123,12 @@ async def stage_3_generate_internal_calls(
 
     if not transitions:
         return []
+
+    # Scale the output budget with call count: one call per transition, each a
+    # 400-600 word transcript (~800-1100 tokens). A fixed 2500 truncates once
+    # there are 3+ transitions, and the broad except below would then silently
+    # drop the entire batch. Cap at 8000 to stay within the per-minute budget.
+    max_tokens = min(8000, max(max_tokens, 500 + 1200 * len(transitions)))
 
     # Extract metadata
     metadata = deal_data.get("metadata", {})
@@ -1220,6 +1228,12 @@ async def stage_3_generate_internal_calls_series(
 
     if not transitions:
         return []
+
+    # Scale the output budget with call count: one call per transition, each a
+    # 400-600 word transcript (~800-1100 tokens). A fixed 2500 truncates once
+    # there are 3+ transitions, and the broad except below would then silently
+    # drop the entire batch. Cap at 8000 to stay within the per-minute budget.
+    max_tokens = min(8000, max(max_tokens, 500 + 1200 * len(transitions)))
 
     # Extract metadata
     metadata = deal_data.get("metadata", {})

@@ -31,7 +31,7 @@ def validate_event_quality(event):
     assert "record_type" in event, f"Event missing record_type: {event}"
     assert event["record_type"] in [
         "call", "email", "crm_note", "support_ticket", "support_call",
-        "slack_channel", "slack_message"
+        "slack_channel", "slack_message", "internal_call"
     ], f"Unknown record_type: {event['record_type']}"
 
     # Type-specific validation
@@ -79,6 +79,14 @@ def validate_event_quality(event):
         assert "sender" in message, "Slack message missing sender"
         assert "body" in message, "Slack message missing body"
         assert len(message["body"].strip()) > 10, "Slack message body too short"
+
+    elif record_type == "internal_call":
+        assert "title" in event, "Internal call missing title"
+        assert "transcript" in event, "Internal call missing transcript"
+        assert len(event["transcript"].strip()) > 50, "Internal call transcript too short"
+        assert "summary" in event, "Internal call missing summary"
+        assert "participants" in event, "Internal call missing participants"
+        assert len(event.get("participants", [])) > 0, "Internal call missing participants list"
 
     return True
 
