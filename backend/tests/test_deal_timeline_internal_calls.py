@@ -11,10 +11,6 @@ from unittest.mock import patch, AsyncMock
 from datetime import datetime, timedelta, timezone
 from pydantic import ValidationError
 
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 from generator import generate_complete_deal, _parse_sort_ts
 from models import InternalCallTypeEnum, DealHealthEnum
 from tests.fixtures import create_baseline_config

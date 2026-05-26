@@ -7,13 +7,9 @@ import pytest
 import asyncio
 import json
 import logging
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch, AsyncMock
 from datetime import datetime, timedelta, timezone
 from pydantic import ValidationError
-
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from generator import _detect_sentiment_transitions, stage_3_generate_internal_calls, stage_3_generate_internal_calls_series
 from models import InternalCallEvent, InternalCallTypeEnum, DealHealthEnum, CallParticipant
@@ -364,6 +360,37 @@ async def test_participants_are_valid_call_participant_objects():
         valid_roles = {"AE", "Manager", "SE", "SDR"}
         for p in participants:
             assert p["role"] in valid_roles, f"Invalid role: {p['role']}"
+
+
+@pytest.mark.asyncio
+async def test_call_participant_pydantic_validation():
+    """Test that CallParticipant Pydantic model validates correctly."""
+    # Test valid CallParticipant
+    valid_participant = CallParticipant.model_validate({"name": "Jane Smith", "role": "AE"})
+    assert valid_participant.name == "Jane Smith"
+    assert valid_participant.role == "AE"
+
+    # Test with various valid roles
+    for role in ["AE", "Manager", "SE", "SDR"]:
+        p = CallParticipant.model_validate({"name": "Test User", "role": role})
+        assert p.role == role
+
+    # Test missing required field: name
+    with pytest.raises(ValidationError):
+        CallParticipant.model_validate({"role": "AE"})
+
+    # Test missing required field: role
+    with pytest.raises(ValidationError):
+        CallParticipant.model_validate({"name": "Jane Smith"})
+
+    # Test missing both required fields
+    with pytest.raises(ValidationError):
+        CallParticipant.model_validate({})
+
+    # Test that both fields are required (any role string is accepted)
+    p = CallParticipant.model_validate({"name": "Jane Smith", "role": "CustomRole"})
+    assert p.name == "Jane Smith"
+    assert p.role == "CustomRole"
 
 
 @pytest.mark.asyncio
@@ -762,7 +789,10 @@ async def test_error_handling_invalid_json(caplog):
             )
 
         assert result == [], "Should return empty list on JSON error"
-        assert "Invalid JSON" in caplog.text, "Should log warning about invalid JSON"
+        assert any(
+            record.levelname == "WARNING" and "Invalid JSON" in record.message
+            for record in caplog.records
+        ), "Should log WARNING about invalid JSON"
 
 
 @pytest.mark.asyncio
@@ -810,7 +840,10 @@ async def test_error_handling_validation_failure(caplog):
             )
 
         assert result == [], "Should return empty list on validation error"
-        assert "Invalid internal call structure" in caplog.text, "Should log warning"
+        assert any(
+            record.levelname == "WARNING" and "Invalid internal call structure" in record.message
+            for record in caplog.records
+        ), "Should log WARNING about invalid structure"
 
 
 @pytest.mark.asyncio
@@ -852,7 +885,10 @@ async def test_error_handling_api_error(caplog):
             )
 
         assert result == [], "Should return empty list on API error"
-        assert "Internal call generation failed" in caplog.text, "Should log error"
+        assert any(
+            record.levelname == "ERROR" and "Internal call generation failed" in record.message
+            for record in caplog.records
+        ), "Should log ERROR about generation failure"
 
 
 # ============= Test 8: Series mode includes rep context & quarter health =============
