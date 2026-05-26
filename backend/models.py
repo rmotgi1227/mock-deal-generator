@@ -80,6 +80,20 @@ class SupportContactFrequencyEnum(str, Enum):
     MEDIUM = "medium"
     HIGH = "high"
 
+class InternalCallTypeEnum(str, Enum):
+    """Internal call types."""
+    DEAL_REVIEW = "deal_review"
+    FORECAST_CALL = "forecast_call"
+    STRATEGY_SESSION = "strategy_session"
+    WAR_ROOM = "war_room"
+    CLOSE_PLAN_SESSION = "close_plan_session"
+
+class DealHealthEnum(str, Enum):
+    """Deal health states."""
+    ON_TRACK = "on_track"
+    AT_RISK = "at_risk"
+    STALLED = "stalled"
+
 class RecordTypeEnum(str, Enum):
     """Timeline event record type."""
     CALL = "call"
@@ -325,6 +339,26 @@ class SupportCallEvent(BaseModel):
     resolution: str  # Call outcome (issue_resolved, escalated, etc.)
     transcript: str  # Detailed notes from the support call
     support_agent: str  # Name of support agent who took the call
+
+class CallParticipant(BaseModel):
+    """Internal call participant."""
+    name: str
+    role: str  # e.g., "AE", "Manager", "SE", "SDR"
+
+class InternalCallEvent(BaseModel):
+    """Internal sales team call timeline event."""
+    record_type: str = "internal_call"
+    id: str  # UUID
+    title: str
+    call_type: InternalCallTypeEnum
+    date: str  # YYYY-MM-DD
+    timestamp: str  # ISO 8601
+    stage: str
+    participants: List[CallParticipant]
+    transcript: str
+    summary: str
+    action_items: List[str]
+    deal_health: DealHealthEnum
 
 # ============= Slack Data Models =============
 
