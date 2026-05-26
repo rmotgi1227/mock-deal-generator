@@ -13,9 +13,10 @@ import uuid
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any, Optional, Callable, Awaitable, TYPE_CHECKING
-from anthropic import AsyncAnthropic
+from anthropic import AsyncAnthropic, AnthropicError
 import os
 from dotenv import load_dotenv
+from pydantic import ValidationError
 
 if TYPE_CHECKING:
     from token_tracker import TokenTracker
@@ -911,7 +912,6 @@ async def stage_3_generate_slack_content(
     slack_data = json.loads(text)
     channels = slack_data if isinstance(slack_data, list) else slack_data.get("channels", [])
 
-    from pydantic import ValidationError
     from models import SlackMessage
 
     slack_events = []
@@ -979,7 +979,6 @@ async def stage_3_generate_slack_content_series(
     slack_data = json.loads(text)
     channels = slack_data if isinstance(slack_data, list) else slack_data.get("channels", [])
 
-    from pydantic import ValidationError
     from models import SlackMessage
 
     slack_events = []
@@ -1242,9 +1241,7 @@ async def generate_complete_deal(
         if progress_callback:
             await progress_callback("slack_generated", "Slack messages generated", 95)
     except Exception as slack_err:
-        import pydantic
-        import anthropic
-        if not isinstance(slack_err, (json.JSONDecodeError, pydantic.ValidationError, KeyError, ValueError, TypeError, anthropic.AnthropicError)):
+        if not isinstance(slack_err, (json.JSONDecodeError, ValidationError, KeyError, ValueError, TypeError, AnthropicError, asyncio.TimeoutError, asyncio.CancelledError, RuntimeError)):
             raise
         logger.error("Slack generation failed, continuing without Slack events: %s", slack_err)
         slack_events = []

@@ -1,7 +1,11 @@
 import React, { useMemo } from 'react'
 
-const formatTime = (timestamp) =>
-  new Date(timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+const formatTime = (timestamp) => {
+  if (timestamp == null) return '—'
+  const date = new Date(timestamp)
+  if (isNaN(date.getTime())) return '—'
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
 
 const SENDER_COLORS = {
   AE: '#a78bfa', SDR: '#60a5fa', Manager: '#f472b6',

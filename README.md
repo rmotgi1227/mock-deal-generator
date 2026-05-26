@@ -170,7 +170,7 @@ Each deal goes through three stages:
 | **Stage 3 — Content** | Full transcripts, email bodies, CRM notes — generated concurrently with cached context | ~2K tokens/event |
 | **Stage 3 — Slack** | Internal Slack channels with threaded team conversations anchored to deal events | ~6K tokens |
 
-Stage 3 runs up to 5 events concurrently with an output token rate limiter (10K tokens/min for Haiku) to stay within API limits. The deal context is cached in the system prompt block across all Stage 3 calls, reducing cost on larger deals. Slack generation runs after the timeline is complete and fails gracefully — the deal is saved even if Slack content cannot be produced.
+Stage 3 runs up to 2 events concurrently with an output token rate limiter (10K tokens/min for Haiku) to stay within API limits. The deal context is cached in the system prompt block across all Stage 3 calls, reducing cost on larger deals. Slack generation runs after the timeline is complete and fails gracefully — the deal is saved even if Slack content cannot be produced.
 
 ---
 
