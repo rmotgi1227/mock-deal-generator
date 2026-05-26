@@ -1,5 +1,6 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import TimelineEvent from '../../components/TimelineEvent'
+import SlackView from './SlackView'
 
 const STAGE_NAMES = ['Prospecting', 'Discovery', 'Demo', 'Evaluation', 'Negotiation', 'Closed']
 
@@ -11,8 +12,8 @@ const CHAMPION_ENTRY_TO_STAGE = {
   late_stage_rescue: 'Negotiation',
 }
 
-const TabBar = ({ activeTab, setActiveTab, hasCS }) => {
-  if (!hasCS) return null
+const TabBar = ({ activeTab, setActiveTab, hasCS, hasSlack }) => {
+  if (!hasCS && !hasSlack) return null
   const tab = (id, label) => (
     <button
       onClick={() => setActiveTab(id)}
@@ -44,7 +45,8 @@ const TabBar = ({ activeTab, setActiveTab, hasCS }) => {
       border: '1px solid var(--rule)',
     }}>
       {tab('sales', 'Sales Timeline')}
-      {tab('cs', 'CS Timeline')}
+      {hasCS && tab('cs', 'CS Timeline')}
+      {hasSlack && tab('slack', 'Slack')}
     </div>
   )
 }
@@ -172,12 +174,18 @@ const DealTimeline = ({ deal }) => {
   const metadata = deal.metadata
   const [activeTab, setActiveTab] = useState('sales')
 
-  const { salesEvents, csEvents } = useMemo(() => ({
-    salesEvents: events.filter(e => !e.record_type?.startsWith('support')),
+  const { salesEvents, csEvents, slackEvents } = useMemo(() => ({
+    salesEvents: events.filter(e => !e.record_type?.startsWith('support') && !e.record_type?.startsWith('slack')),
     csEvents: events.filter(e => e.record_type?.startsWith('support')),
+    slackEvents: events.filter(e => e.record_type?.startsWith('slack')),
   }), [events])
 
   const hasCS = csEvents.length > 0
+  const hasSlack = slackEvents.length > 0
+
+  useEffect(() => {
+    setActiveTab('sales')
+  }, [deal?.metadata?.deal_id])
 
   return (
     <div>
@@ -185,12 +193,11 @@ const DealTimeline = ({ deal }) => {
         Timeline
       </h2>
 
-      <TabBar activeTab={activeTab} setActiveTab={setActiveTab} hasCS={hasCS} />
+      <TabBar activeTab={activeTab} setActiveTab={setActiveTab} hasCS={hasCS} hasSlack={hasSlack} />
 
-      {activeTab === 'sales'
-        ? <SalesTimeline events={salesEvents} metadata={metadata} />
-        : <CSTimeline events={csEvents} metadata={metadata} />
-      }
+      {activeTab === 'sales' && <SalesTimeline events={salesEvents} metadata={metadata} />}
+      {activeTab === 'cs' && <CSTimeline events={csEvents} metadata={metadata} />}
+      {activeTab === 'slack' && <div style={{ marginTop: '24px' }}><SlackView deal={deal} /></div>}
     </div>
   )
 }

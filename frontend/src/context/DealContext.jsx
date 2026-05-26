@@ -1,5 +1,5 @@
 import React, { createContext, useState, useCallback, useRef } from 'react'
-import { dealApi, BASE_URL } from '../utils/api'
+import { dealApi, BASE_URL, getAuthHeaders } from '../utils/api'
 
 export const DealContext = createContext()
 
@@ -31,7 +31,10 @@ export const DealProvider = ({ children }) => {
     try {
       const response = await fetch(`${BASE_URL}/api/generate-stream`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...getAuthHeaders()
+        },
         body: JSON.stringify(config),
         signal: controller.signal,
       })
@@ -78,7 +81,12 @@ export const DealProvider = ({ children }) => {
 
       throw new Error('Stream ended without completion event')
     } catch (err) {
-      if (err.name === 'AbortError') return
+      if (err.name === 'AbortError') {
+        setLoading(false)
+        setGenerationProgress(0)
+        setGenerationStep('')
+        return
+      }
       const errorMsg = err.message || 'Generation failed'
       setError(errorMsg)
       setLoading(false)
@@ -101,7 +109,10 @@ export const DealProvider = ({ children }) => {
     try {
       const response = await fetch(`${BASE_URL}/api/generate-series-stream`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...getAuthHeaders()
+        },
         body: JSON.stringify(seriesConfig),
         signal: controller.signal,
       })
@@ -148,7 +159,12 @@ export const DealProvider = ({ children }) => {
 
       throw new Error('Stream ended without completion event')
     } catch (err) {
-      if (err.name === 'AbortError') return
+      if (err.name === 'AbortError') {
+        setLoading(false)
+        setGenerationProgress(0)
+        setGenerationStep('')
+        return
+      }
       const errorMsg = err.message || 'Generation failed'
       setError(errorMsg)
       setLoading(false)
@@ -204,7 +220,10 @@ export const DealProvider = ({ children }) => {
     try {
       const response = await fetch(`${BASE_URL}/api/bulk-generate-stream`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...getAuthHeaders()
+        },
         body: JSON.stringify({ count, overrides }),
         signal: controller.signal,
       })
@@ -247,7 +266,11 @@ export const DealProvider = ({ children }) => {
         }
       }
     } catch (err) {
-      if (err.name === 'AbortError') return
+      if (err.name === 'AbortError') {
+        setBulkLoading(false)
+        setBulkProgress({ completed: 0, failed: 0, total: 0 })
+        return
+      }
       setBulkLoading(false)
       throw err
     }

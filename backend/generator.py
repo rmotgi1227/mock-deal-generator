@@ -13,16 +13,16 @@ import uuid
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any, Optional, Callable, Awaitable, TYPE_CHECKING
-from anthropic import AsyncAnthropic
+from anthropic import AsyncAnthropic, AnthropicError
 import os
 from dotenv import load_dotenv
+from pydantic import ValidationError
 
 if TYPE_CHECKING:
     from token_tracker import TokenTracker
 from prompts import (
     SYSTEM_PROMPT,
     STAGE_1_PROMPT_TEMPLATE,
-    STAGE_1_CS_PROMPT_TEMPLATE,
     STAGE_1_CS_USER_TEMPLATE,
     STAGE_2_PROMPT_TEMPLATE,
     STAGE_2_CALLS_PROMPT_TEMPLATE,
@@ -35,6 +35,8 @@ from prompts import (
     STAGE_3_CRM_NOTE_PROMPT_TEMPLATE,
     STAGE_3_SUPPORT_TICKET_PROMPT_TEMPLATE,
     STAGE_3_SUPPORT_CALL_PROMPT_TEMPLATE,
+    STAGE_3_SLACK_PROMPT_TEMPLATE,
+    STAGE_3_SLACK_SERIES_PROMPT_TEMPLATE,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,12 +49,15 @@ MODEL = os.environ.get("CLAUDE_MODEL", "claude-haiku-4-5")
 # Max tokens per event type — tuned to actual output needs
 # Based on token usage measurements: actual usage is 60-80% of limits
 # Reduced allocations by 12-21% to optimize token consumption while maintaining quality
+_SENTIMENT_SCORE = {"positive": 0.8, "neutral": 0.5, "concerned": 0.25, "negative": 0.1}
+
 MAX_TOKENS_BY_TYPE = {
     "stage1": 3500,    # Reduced from 4096 (actual ~3200, 14.5% reduction)
-    "stage2": 8000,    # Reduced from 10000 (actual ~5500, 20% reduction)
+    "stage2": 12000,   # Increased for series deals with more events
     "call": 2000,      # Reduced from 2500 (actual ~1800, 20% reduction)
     "email": 800,      # Reduced from 1024 (actual ~700, 21.9% reduction)
     "crm_note": 350,   # Reduced from 400 (actual ~300, 12.5% reduction)
+    "stage3_slack": 6000,  # Conversational Slack messages need more tokens
 }
 
 # Tier-1 output tokens per minute by model family
@@ -148,7 +153,7 @@ def _parse_claude_response(text: str) -> str:
         except Exception:
             with open("/tmp/claude_response.json", "w") as f:
                 f.write(response)
-            raise Exception(f"Claude response is not valid JSON: {str(parse_err)}\n\nFull response saved to /tmp/claude_response.json")
+            raise ValueError(f"Claude response is not valid JSON: {str(parse_err)}\n\nFull response saved to /tmp/claude_response.json")
 
 
 async def _call_with_retry(
@@ -534,8 +539,12 @@ async def _stage_2_generate_emails(
         {"type": "text", "text": f"Deal foundation:\n{stage1_json}", "cache_control": {"type": "ephemeral"}},
     ]
 
+    calls_summary = "\n".join(
+        f"- [{e.get('date')}] {e.get('call_type','call')}: {e.get('title','Call')} (stage={e.get('stage')})"
+        for e in call_events
+    )
     prompt = STAGE_2_EMAILS_PROMPT_TEMPLATE.format(
-        call_events_json=json.dumps(call_events),
+        call_events_json=calls_summary,
         deal_start_date=deal_start_date,
         deal_end_date=deal_end_date,
         emails_per_stage=config['emails_per_stage'],
@@ -571,9 +580,17 @@ async def _stage_2_generate_crm_notes(
         {"type": "text", "text": f"Deal foundation:\n{stage1_json}", "cache_control": {"type": "ephemeral"}},
     ]
 
+    calls_summary = "\n".join(
+        f"- [{e.get('date')}] call: {e.get('title','Call')} (stage={e.get('stage')})"
+        for e in call_events
+    )
+    emails_summary = "\n".join(
+        f"- [{e.get('date')}] email: {e.get('subject','Email')} (stage={e.get('stage')})"
+        for e in email_events
+    )
     prompt = STAGE_2_CRM_NOTES_PROMPT_TEMPLATE.format(
-        call_events_json=json.dumps(call_events),
-        email_events_json=json.dumps(email_events),
+        call_events_json=calls_summary,
+        email_events_json=emails_summary,
         deal_start_date=deal_start_date,
         deal_end_date=deal_end_date,
         champion_entry=config['champion_entry'],
@@ -639,6 +656,34 @@ def get_champion_context(stage1: Dict[str, Any], champion_entered: bool, current
 
     champion = next(sh for sh in stage1['stakeholders'] if sh.get('is_champion'))
     return f"Champion: {champion['name']} ({champion['title']}) is actively supporting the deal internally."
+
+
+def _derive_current_stage(stage_progression: list, deal_outcome: str) -> str:
+    if deal_outcome == "closed_won" or deal_outcome == "closed_lost":
+        return "Closed"
+    if not stage_progression:
+        return "Unknown"
+    last = stage_progression[-1]
+    if isinstance(last, dict):
+        return last.get("stage", "Unknown")
+    return str(last)
+
+
+def _slack_quarter_health(deal_data: Dict) -> str:
+    """Derive quarter health label from a single deal's outcome and sentiment."""
+    arc = deal_data["metadata"].get("sentiment_arc", [])
+    last = arc[-1] if arc else None
+    if isinstance(last, dict):
+        last_score = _SENTIMENT_SCORE.get(last.get("sentiment", "neutral"), 0.5)
+    elif isinstance(last, (int, float)):
+        last_score = float(last)
+    else:
+        last_score = 0.5
+    if deal_data["metadata"].get("complexity_mode") == "messy" or last_score < 0.3:
+        return "rough"
+    if deal_data["metadata"].get("outcome") == "closed_won":
+        return "strong"
+    return "average"
 
 
 async def stage_3_generate_call_content(
@@ -807,6 +852,186 @@ async def stage_3_generate_support_call_content(
     return event
 
 
+async def stage_3_generate_slack_content(
+    deal_id: str,
+    deal_data: Dict,
+    max_tokens: int = None,
+    limiter: Optional[_OutputTokenLimiter] = None,
+    token_tracker: Optional['TokenTracker'] = None,
+) -> List[Dict[str, Any]]:
+    """Generate Slack channels and messages for single/bulk deals."""
+    from models import SlackChannel
+
+    if max_tokens is None:
+        max_tokens = MAX_TOKENS_BY_TYPE["stage3_slack"]
+
+    calls = [e for e in deal_data.get("timeline_events", deal_data.get("events", [])) if e.get("record_type") == "call"]
+    emails = [e for e in deal_data.get("timeline_events", deal_data.get("events", [])) if e.get("record_type") == "email"]
+
+    calls_summary = "\n".join([f"- {c.get('date')}: {c.get('summary', 'Call')}" for c in calls[:5]])
+    emails_summary = "\n".join([f"- {e.get('date')}: {e.get('subject', 'Email')}" for e in emails[:5]])
+
+    # Extract stage names from stage progression dicts
+    metadata = deal_data.get("metadata", {})
+    config = metadata.get("config", {})
+    company = metadata.get("company", {})
+
+    stage_progression = metadata.get('stage_progression', [])
+    if stage_progression and isinstance(stage_progression[0], dict):
+        stage_names = [s.get('stage', '') for s in stage_progression]
+    else:
+        stage_names = stage_progression
+    timeline_summary = f"Stage progression: {' → '.join(stage_names)}"
+
+    # Extract objection texts from objection dicts
+    objections_list = metadata.get("objections", [])
+    if objections_list and isinstance(objections_list[0], dict):
+        objections_str = ", ".join([obj.get("text", "") for obj in objections_list]) or "None"
+    else:
+        objections_str = ", ".join(objections_list) if objections_list else "None"
+
+    ae_name = metadata.get("sales_rep", {}).get("name", "AE")
+    se_name = metadata.get("sales_engineer", {}).get("name", "SE") if metadata.get("sales_engineer") else "SE"
+
+    prompt = STAGE_3_SLACK_PROMPT_TEMPLATE.format(
+        company_name=company.get("name", "Unknown Company"),
+        industry=config.get("industry", "Technology"),
+        deal_size=config.get("deal_size", "Unknown"),
+        complexity_mode=config.get("complexity", "normal"),
+        sentiment_arc=json.dumps(metadata.get("sentiment_arc", [])),
+        objections=objections_str,
+        outcome=metadata.get("deal_outcome", "closed_won"),
+        ae_name=ae_name,
+        se_name=se_name,
+        timeline_summary=timeline_summary,
+        calls_summary=calls_summary,
+        emails_summary=emails_summary,
+    )
+
+    text = await call_claude(prompt, max_tokens, limiter=limiter, stage="stage3_slack", token_tracker=token_tracker)
+    slack_data = json.loads(text)
+    channels = slack_data if isinstance(slack_data, list) else slack_data.get("channels", [])
+
+    from models import SlackMessage
+
+    slack_events = []
+    for channel in channels:
+        if not isinstance(channel, dict):
+            logger.warning("Dropping non-dict Slack channel: %r", channel)
+            continue
+        valid_messages = []
+        for msg in channel.get("messages", []):
+            try:
+                SlackMessage(**msg)
+                valid_messages.append(msg)
+            except ValidationError as e:
+                logger.warning(f"Dropping invalid Slack message: {e}")
+        channel["messages"] = valid_messages
+
+        try:
+            slack_channel = SlackChannel(**channel)
+            channel_dump = slack_channel.model_dump(mode='json')
+            ts = channel_dump.get("created_at", "2000-01-01T00:00:00")
+            slack_events.append({
+                "record_type": "slack_channel",
+                "channel": channel_dump,
+                "date": ts.split("T")[0] if "T" in str(ts) else str(ts)[:10],
+                "timestamp": ts,
+                "stage": metadata.get("current_stage", "Unknown")
+            })
+        except ValidationError as e:
+            logger.warning(f"Dropping invalid Slack channel: {e}")
+    return slack_events
+
+
+async def stage_3_generate_slack_content_series(
+    deal_id: str,
+    deal_data: Dict,
+    rep_name: str,
+    max_tokens: int = None,
+    limiter: Optional[_OutputTokenLimiter] = None,
+    token_tracker: Optional['TokenTracker'] = None,
+) -> List[Dict[str, Any]]:
+    """Generate series-mode Slack content."""
+    from models import SlackChannel
+
+    if max_tokens is None:
+        max_tokens = MAX_TOKENS_BY_TYPE["stage3_slack"]
+
+    calls = [e for e in deal_data.get("timeline_events", deal_data.get("events", [])) if e.get("record_type") == "call"]
+    emails = [e for e in deal_data.get("timeline_events", deal_data.get("events", [])) if e.get("record_type") == "email"]
+    calls_summary = "\n".join([f"- {c.get('date')}: {c.get('summary', 'Call')}" for c in calls[:5]])
+    emails_summary = "\n".join([f"- {e.get('date')}: {e.get('subject', 'Email')}" for e in emails[:5]])
+    timeline_summary = f"{calls_summary}\n{emails_summary}"
+
+    se_name = deal_data.get("metadata", {}).get("sales_engineer", {}).get("name", "SE") if deal_data.get("metadata", {}).get("sales_engineer") else "SE"
+    metadata = deal_data.get("metadata", {})
+    company = metadata.get("company", {})
+
+    prompt = STAGE_3_SLACK_SERIES_PROMPT_TEMPLATE.format(
+        rep_name=rep_name,
+        se_name=se_name,
+        current_deal_name=company.get("name", "Unknown Company"),
+        current_deal_stage=metadata.get("current_stage", "Unknown"),
+        current_deal_outcome=metadata.get("outcome", "Unknown"),
+        quarter_health=_slack_quarter_health(deal_data),
+        timeline_summary=timeline_summary
+    )
+
+    text = await call_claude(prompt, max_tokens, limiter=limiter, stage="stage3_slack_series", token_tracker=token_tracker)
+    slack_data = json.loads(text)
+    channels = slack_data if isinstance(slack_data, list) else slack_data.get("channels", [])
+
+    from models import SlackMessage
+
+    slack_events = []
+    for channel in channels:
+        if not isinstance(channel, dict):
+            logger.warning("Dropping non-dict Slack channel: %r", channel)
+            continue
+        valid_messages = []
+        for msg in channel.get("messages", []):
+            try:
+                SlackMessage(**msg)
+                valid_messages.append(msg)
+            except ValidationError as e:
+                logger.warning(f"Dropping invalid Slack message in series: {e}")
+        channel["messages"] = valid_messages
+
+        try:
+            slack_channel = SlackChannel(**channel)
+            channel_dump = slack_channel.model_dump(mode='json')
+            ts = channel_dump.get("created_at", "2000-01-01T00:00:00")
+            slack_events.append({
+                "record_type": "slack_channel",
+                "channel": channel_dump,
+                "date": ts.split("T")[0] if "T" in str(ts) else str(ts)[:10],
+                "timestamp": ts,
+                "stage": metadata.get("current_stage", "Unknown")
+            })
+        except ValidationError as e:
+            logger.warning(f"Dropping invalid Slack channel in series: {e}")
+    return slack_events
+
+
+def _parse_sort_ts(ts: str) -> datetime:
+    """Parse and normalize timestamp to UTC naive datetime for consistent sorting."""
+    try:
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt
+    except (ValueError, AttributeError, TypeError):
+        return datetime(2000, 1, 1)
+
+
+def _insert_slack_events_into_timeline(timeline_events: List[Dict], slack_events: List[Dict]) -> List[Dict]:
+    """Insert Slack events into timeline, sorted by timestamp."""
+    merged = timeline_events + slack_events
+    merged.sort(key=lambda x: _parse_sort_ts(x.get("timestamp", "")))
+    return merged
+
+
 async def stage_3_generate_all_content(
     events: List[Dict[str, Any]],
     stage1: Dict[str, Any],
@@ -966,7 +1191,7 @@ async def generate_complete_deal(
         )
         # Merge CS events into main timeline
         events_scaffold.extend(cs_events_scaffold)
-        events_scaffold.sort(key=lambda e: e["timestamp"])
+        events_scaffold.sort(key=lambda e: e.get("timestamp", ""))
 
     # Add expected_churn flag to config for Stage 3 support event generation
     if cs_context:
@@ -977,6 +1202,57 @@ async def generate_complete_deal(
         await progress_callback("stage3_start", f"Generating content for {len(events_scaffold)} events...", 35)
 
     events = await stage_3_generate_all_content(events_scaffold, stage1, config, progress_callback, output_token_limiter, token_tracker)
+
+    # Generate Slack (Stage 3.5) - after timeline/emails/CRM are finalized
+    deal_data = {
+        "metadata": {
+            "deal_id": deal_id,
+            "company": stage1["company"],
+            "sales_rep": stage1.get("sales_rep"),
+            "sales_engineer": stage1.get("sales_engineer"),
+            "config": config,
+            "deal_start_date": str(deal_start_date),
+            "deal_end_date": str(deal_end_date),
+            "stage_progression": stage1.get("stage_progression", []),
+            "sentiment_arc": stage1.get("sentiment_arc", []),
+            "objections": stage1.get("objections", []),
+            "stakeholders": stage1.get("stakeholders", []),
+            "deal_outcome": config["deal_outcome"],
+            "current_stage": _derive_current_stage(stage1.get("stage_progression", []), config["deal_outcome"]),
+            "complexity_mode": config.get("complexity", "Unknown"),
+            "outcome": config["deal_outcome"],
+            "deal_size": config["deal_size"],
+        },
+        "timeline_events": events,
+    }
+
+    # Generate Slack content (series mode or standard)
+    try:
+        if config.get("is_series", False):
+            slack_events = await stage_3_generate_slack_content_series(
+                deal_id=deal_id,
+                deal_data=deal_data,
+                rep_name=stage1["sales_rep"]["name"],
+                limiter=output_token_limiter,
+                token_tracker=token_tracker,
+            )
+        else:
+            slack_events = await stage_3_generate_slack_content(
+                deal_id=deal_id,
+                deal_data=deal_data,
+                limiter=output_token_limiter,
+                token_tracker=token_tracker,
+            )
+        events = _insert_slack_events_into_timeline(events, slack_events)
+        if progress_callback:
+            await progress_callback("slack_generated", "Slack messages generated", 95)
+    except Exception as slack_err:
+        if not isinstance(slack_err, (json.JSONDecodeError, ValidationError, KeyError, ValueError, TypeError, AnthropicError, asyncio.TimeoutError, asyncio.CancelledError, RuntimeError)):
+            raise
+        logger.error("Slack generation failed, continuing without Slack events: %s", slack_err)
+        slack_events = []
+        if progress_callback:
+            await progress_callback("slack_failed", "Slack generation failed, continuing without Slack", 95)
 
     if progress_callback:
         await progress_callback("saving", "Saving deal...", 96)

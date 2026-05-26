@@ -1,5 +1,7 @@
 import React from 'react'
 
+const BRIEF_TYPES = new Set(['call', 'email', 'crm_note'])
+
 const SentimentArc = ({ metadata, events }) => {
   const stages = metadata.sentiment_arc
 
@@ -27,7 +29,7 @@ const SentimentArc = ({ metadata, events }) => {
   // Derive a 1-sentence brief from the first event in each stage
   const getBrief = (stageName) => {
     const stageEvents = events
-      .filter(e => e.stage === stageName)
+      .filter(e => e.stage === stageName && BRIEF_TYPES.has(e.record_type))
       .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
 
     if (!stageEvents.length) return null

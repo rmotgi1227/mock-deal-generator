@@ -30,7 +30,8 @@ def validate_event_quality(event):
     """Validate that an event has quality content."""
     assert "record_type" in event, f"Event missing record_type: {event}"
     assert event["record_type"] in [
-        "call", "email", "crm_note", "support_ticket", "support_call"
+        "call", "email", "crm_note", "support_ticket", "support_call",
+        "slack_channel", "slack_message"
     ], f"Unknown record_type: {event['record_type']}"
 
     # Type-specific validation
@@ -60,6 +61,24 @@ def validate_event_quality(event):
     elif record_type == "support_call":
         assert "summary" in event, "Support call missing summary"
         assert len(event["summary"].strip()) > 50, "Support call summary too short"
+
+    elif record_type == "slack_channel":
+        assert "channel" in event, "Slack channel missing channel data"
+        channel = event["channel"]
+        assert isinstance(channel, dict), "Slack channel data must be dict"
+        assert "channel_id" in channel, "Slack channel missing channel_id"
+        assert "name" in channel, "Slack channel missing name"
+        assert "messages" in channel, "Slack channel missing messages"
+        assert isinstance(channel["messages"], list), "Slack channel messages must be list"
+
+    elif record_type == "slack_message":
+        assert "message" in event, "Slack message missing message data"
+        message = event["message"]
+        assert isinstance(message, dict), "Slack message data must be dict"
+        assert "message_id" in message, "Slack message missing message_id"
+        assert "sender" in message, "Slack message missing sender"
+        assert "body" in message, "Slack message missing body"
+        assert len(message["body"].strip()) > 10, "Slack message body too short"
 
     return True
 

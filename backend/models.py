@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Literal, Union
 from enum import Enum
+from datetime import datetime
 
 # ============= Enums =============
 
@@ -87,6 +88,8 @@ class RecordTypeEnum(str, Enum):
     DEAL_METADATA = "deal_metadata"
     SUPPORT_TICKET = "support_ticket"
     SUPPORT_CALL = "support_call"
+    SLACK_CHANNEL = "slack_channel"
+    SLACK_MESSAGE = "slack_message"
 
 class SupportLevelEnum(str, Enum):
     """Stakeholder support level."""
@@ -322,6 +325,29 @@ class SupportCallEvent(BaseModel):
     resolution: str  # Call outcome (issue_resolved, escalated, etc.)
     transcript: str  # Detailed notes from the support call
     support_agent: str  # Name of support agent who took the call
+
+# ============= Slack Data Models =============
+
+class SlackMessage(BaseModel):
+    """Slack message."""
+    message_id: str  # UUID
+    channel_id: str
+    sender: Literal["AE", "SDR", "Manager", "SE", "Legal", "CS", "Rep"]
+    sender_name: Optional[str] = None
+    body: str
+    timestamp: datetime
+    reactions: Optional[List[str]] = None
+    is_thread_reply: bool = False
+    thread_parent_id: Optional[str] = None
+
+class SlackChannel(BaseModel):
+    """Slack channel."""
+    channel_id: str
+    name: str  # e.g., "deal-acme-corp", "pipeline-jane-doe"
+    topic: str
+    is_shared: bool = False  # True for rep-level channels in series mode
+    created_at: datetime
+    messages: List[SlackMessage] = Field(default_factory=list)
 
 # ============= Response Models =============
 

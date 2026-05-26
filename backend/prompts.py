@@ -85,71 +85,20 @@ Return a single JSON object with this exact structure:
 }}
 
 Rules:
-- sentiment_arc must start at {starting_sentiment} and end at {ending_sentiment} with natural intermediate progression.
-- stage_progression dates must fall within {deal_start_date} to {deal_end_date}.
-- stakeholders must include exactly {num_stakeholders} people. Assign exactly one as is_champion: true only if champion_entry is not "none".
-- For all text fields (name, title, archetype, text): Use ONLY alphanumeric characters, spaces, hyphens, apostrophes, periods, and commas. NO quotes (straight or curly), NO ampersands, NO parentheses, NO slashes.
-- If complexity is "simple": 1-2 objections, all resolved. Mostly supporter/neutral stakeholders.
-- If complexity is "normal": 3-4 objections, most resolved. At least one skeptic.
-- If complexity is "messy": 5+ objections, some unresolved. At least one blocker. Include budget, security, and procurement objections.
-- If deal_outcome is "closed_lost": at least one objection must remain unresolved.
-- If ae_name is provided, use it as the sales_rep name exactly. Otherwise generate a realistic name.
-- If ae_experience is provided: junior = uncertain, relies on playbook, less objection recovery; mid = competent, consistent follow-through; senior = confident, shapes deal narrative, reframes objections.
-- If ae_style is provided: consultative = asks questions, educates, low-pressure; assertive = direct, timeline-focused, pushes for next steps; relationship_focused = builds rapport, references shared context, personal tone.
-- If se_name is provided, use it as the sales_engineer name exactly. Otherwise generate a realistic name.
-- If se_technical_depth is provided: shallow = high-level product overview only; competent = handles standard integration and security questions; deep = architects custom solutions, deep technical credibility.
-- If se_involvement is provided: light = SE appears at demo only; standard = demo + evaluation support; heavy = SE on all technical calls, co-owns the deal.
-- The sales_engineer must use the same vendor_company as sales_rep.
-- SE appears in demo and evaluation stage calls as a technical resource.
-- Use AE profile attributes (experience and style) to shape call transcript dialogue, email tone, objection responses, and CRM note observations.
-- Use SE profile attributes (technical depth and involvement) to shape demo quality, technical Q&A depth, and frequency of SE participation.
-- If business_use_case is provided, use it to shape objections, stakeholder archetypes, and deal narrative.
-- If Vendor Company is provided, use it exactly as the sales_rep.vendor_company AND sales_engineer.vendor_company. Also use it as the domain in sales_rep.email and sales_engineer.email (e.g. firstname.lastname@vendorcompany.com — lowercase, strip spaces). Otherwise, generate a fictional SaaS vendor name."""
+- sentiment_arc: start={starting_sentiment}, end={ending_sentiment}, natural progression.
+- stage_progression dates within {deal_start_date} to {deal_end_date}.
+- exactly {num_stakeholders} stakeholders. One is_champion: true unless champion_entry="none".
+- Text fields: alphanumeric, spaces, hyphens, apostrophes, periods, commas ONLY. No quotes, ampersands, parens, slashes.
+- simple: 1-2 objections all resolved, mostly supporters. normal: 3-4 objections mostly resolved, one skeptic. messy: 5+ objections some unresolved, one blocker, include budget/security/procurement.
+- closed_lost: at least one objection unresolved.
+- ae_name if provided: use exactly. ae_experience: junior=uncertain/playbook-reliant, mid=competent, senior=confident/reframes. ae_style: consultative=educates/low-pressure, assertive=direct/pushes next steps, relationship_focused=rapport/personal.
+- se_name if provided: use exactly. se_technical_depth: shallow=overview only, competent=standard Q&A, deep=custom solutions. se_involvement: light=demo only, standard=demo+eval, heavy=all calls.
+- sales_engineer uses same vendor_company as sales_rep. SE appears in demo and evaluation calls.
+- AE/SE profile shapes transcripts, emails, objection handling, CRM notes.
+- business_use_case if provided: shapes objections, stakeholder archetypes, deal narrative.
+- vendor_company if provided: use exactly for sales_rep AND sales_engineer vendor_company AND email domain (firstname.lastname@vendorcompany.com, lowercase, no spaces). Otherwise generate fictional SaaS vendor name."""
 
 # ============= STAGE 1 CS: Customer Success Context =============
-
-STAGE_1_CS_PROMPT_TEMPLATE = """Generate the post-close customer success context for this deal.
-
-Deal Foundation:
-{stage1_json}
-
-CS Configuration:
-- Deal close date: {deal_close_date}
-- CS start date: {cs_start_date}
-- CS end date: {cs_end_date}
-- Adoption challenge: {adoption_challenge}
-- Support contact frequency: {support_contact_frequency}
-- Churn probability: {churn_probability}
-
-Return a single JSON object with this exact structure:
-{{
-  "cs_context": {{
-    "onboarding_start_date": "YYYY-MM-DD (1-2 days after deal_close_date, on or before cs_end_date)",
-    "initial_sentiment": "positive",
-    "primary_blocker": "string (specific blocker matching adoption_challenge, 5-10 words)",
-    "support_contact_initiator": "uuid4 or name string (person who first reaches out)",
-    "churn_date": "YYYY-MM-DD or null (if churn_probability >= 0.7, within cs_start_date to cs_end_date; else null)",
-    "key_adoption_risks": [
-      "string (specific, concrete risk, 5-10 words)",
-      "string (specific, concrete risk, 5-10 words)",
-      "string (specific, concrete risk, 5-10 words)",
-      "string (specific, concrete risk, 5-10 words)"
-    ],
-    "recommended_support_frequency": "integer (calls per month, 2-12 range)"
-  }}
-}}
-
-Rules:
-- onboarding_start_date must be 1-2 days after deal_close_date and on or before cs_end_date.
-- initial_sentiment must always be "positive".
-- primary_blocker must be specific and directly match the adoption_challenge.
-- support_contact_initiator can be a UUID of a support engineer or a realistic name string.
-- churn_date: if churn_probability >= 0.7, generate a date within cs_start_date to cs_end_date; otherwise set to null.
-- key_adoption_risks must have exactly 4 entries, each specific and tied to the adoption_challenge and company context.
-- recommended_support_frequency must reflect the support_contact_frequency parameter (low: 2-3, medium: 5-7, high: 10-12).
-- All text fields: use ONLY alphanumeric characters, spaces, hyphens, apostrophes, periods, and commas. NO quotes, NO ampersands, NO parentheses, NO slashes, NO newlines.
-
-Return only the JSON object, no other text."""
 
 STAGE_1_CS_USER_TEMPLATE = """Generate the post-close customer success context for this deal.
 
@@ -595,3 +544,50 @@ Return a JSON object:
 {{
   "content": "1 to 3 sentences. Blunt, factual, first-person sales-rep voice. No formatting or bullet points. Should read like something typed quickly into Salesforce."
 }}"""
+
+# ============= STAGE 3 Slack: Channel & Message Generation =============
+
+STAGE_3_SLACK_PROMPT_TEMPLATE = """Generate realistic internal sales team Slack messages for this deal.
+
+Deal: {company_name} | {industry} | {deal_size} | complexity={complexity_mode} | outcome={outcome}
+AE: {ae_name} | SE: {se_name}
+Objections: {objections}
+Timeline: {timeline_summary}
+Calls: {calls_summary}
+Emails: {emails_summary}
+
+Generate actual back-and-forth team conversations — NOT status updates. Messages must feel like real people talking:
+- AE posts something specific ("just got off the call, their security team pushed back hard on data residency"), Manager or SE replies ("expected — did you send the compliance docs yet?"), AE replies back
+- Threads form around key deal moments: after demo, when an objection surfaces, when a risk appears, at close
+- Senders react to each other, ask questions, give advice, express concern or excitement
+- Reference specific names, objections, and dates from the deal
+- Tone: casual, direct, no corporate speak. Short messages (1-3 sentences). No emoji.
+
+Channels: Simple=1 (#deal-companyname), Normal=1-2 (#deal-companyname + #at-risk if major objection), Messy=2-3
+sender MUST be ONLY ONE of: AE, SDR, Manager, SE, Legal, CS, Rep
+sender_name: use the real name for AE ({ae_name}) and SE ({se_name}). For Manager, SDR, CS, Legal invent a realistic full name.
+6-10 messages per channel. Use is_thread_reply=true and thread_parent_id to create reply chains under key messages.
+Each message MUST have channel_id matching its channel.
+
+JSON array of SlackChannel objects: [{{"channel_id": "ch_uuid", "name": "deal-companyname", "topic": "", "is_shared": false, "created_at": "ISO", "messages": [{{"message_id": "msg_uuid", "channel_id": "ch_uuid", "sender": "AE", "sender_name": "Sarah Martinez", "body": "", "timestamp": "ISO", "reactions": [], "is_thread_reply": false, "thread_parent_id": null}}]}}]"""
+
+STAGE_3_SLACK_SERIES_PROMPT_TEMPLATE = """Generate realistic internal sales team Slack messages for this deal.
+
+Rep: {rep_name} | SE: {se_name} | Deal: {current_deal_name} | Stage: {current_deal_stage} | Outcome: {current_deal_outcome}
+Quarter health: {quarter_health}
+Timeline: {timeline_summary}
+
+Generate actual back-and-forth team conversations — NOT status updates. Messages must feel like real people talking:
+- AE posts something specific about the deal, Manager or SE replies, others chime in
+- Threads form around key moments: risks, blockers, wins, close
+- Reference specific deal details, express real concern or excitement
+- Tone: casual, direct, short messages (1-3 sentences). No emoji.
+
+Channels: #deal-[name] only. Do NOT generate pipeline or rep-level channels.
+sender MUST be ONLY ONE of: AE, SDR, Manager, SE, Legal, CS, Rep
+sender_name: use real name for AE ({rep_name}) and SE ({se_name}). For Manager, SDR, CS, Legal invent a realistic full name.
+6-10 messages in deal channel. Use is_thread_reply=true and thread_parent_id for reply chains.
+Each message MUST have channel_id matching its channel.
+
+JSON array of SlackChannel objects: [{{"channel_id": "ch_uuid", "name": "deal-companyname", "topic": "", "is_shared": false, "created_at": "ISO", "messages": [{{"message_id": "msg_uuid", "channel_id": "ch_uuid", "sender": "AE", "sender_name": "Sarah Martinez", "body": "", "timestamp": "ISO", "reactions": [], "is_thread_reply": false, "thread_parent_id": null}}]}}]"""
+

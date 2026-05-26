@@ -62,3 +62,4 @@ backend/deals/
 # Internal docs
 docs/superpowers/
 Mock_Deal_REQUIREMENTS.md
+backend/tests/reports/

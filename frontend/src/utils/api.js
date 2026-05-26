@@ -2,9 +2,16 @@ import axios from 'axios'
 
 export const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
+const apiKey = import.meta.env.VITE_API_KEY
+
+export const getAuthHeaders = () => {
+  return apiKey ? { 'X-API-Key': apiKey } : {}
+}
+
 const api = axios.create({
   baseURL: BASE_URL,
-  timeout: 120000
+  timeout: 120000,
+  headers: getAuthHeaders()
 })
 
 export const dealApi = {

@@ -7,12 +7,13 @@ Generates realistic synthetic B2B sales deals using Claude AI. Each deal include
 ## What it does
 
 - Configures deal parameters (industry, size, complexity, stakeholders, etc.)
-- Runs a 3-stage AI pipeline to generate company profiles, deal timelines, and full event content
+- Runs a 3-stage AI pipeline to generate company profiles, deal timelines, full event content, and internal Slack conversations
 - Streams generation progress in real time via Server-Sent Events
-- Stores deals as NDJson files and displays them in a browsable UI with timeline, sentiment arc, and stakeholder grid
+- Stores deals as NDJson files and displays them in a browsable UI with timeline, sentiment arc, stakeholder grid, and Slack view
 - Supports **bulk generation** of N randomized deals concurrently
 - Supports **series deals** representing an account's evolution over months with extended dynamics
 - Optionally generates **post-close Customer Success** scenarios with support tickets and calls
+- Generates **internal Slack conversations** — realistic back-and-forth team threads tied to key deal moments
 
 ---
 
@@ -130,6 +131,16 @@ Enable the **CS Scenario** toggle in the form to append post-close support event
 
 CS events are generated as support tickets and support calls appended to the deal timeline after the close date.
 
+### Slack view
+
+Every generated deal includes a **Slack** tab in the deal view. The tab shows internal team conversations generated alongside the deal:
+
+- Channels are named `#deal-{company}` (simple/normal) or include `#at-risk` and `#escalations` (messy complexity)
+- Messages are back-and-forth threads — AE posts after a call, Manager or SE replies, others chime in
+- Senders are labeled by role (AE, SE, Manager, SDR, Legal, CS) with their real names pulled from the deal configuration
+- Thread replies are visually nested under their parent message
+- Series deals generate a single focused deal channel; standard deals may produce multiple channels based on complexity
+
 ### Series deals
 
 Switch to the **Series** tab to generate a deal that represents an account's evolution over time:
@@ -155,10 +166,11 @@ Each deal goes through three stages:
 | Stage | What it does | Output |
 |-------|-------------|--------|
 | **Stage 1 — Foundation** | Company profile, stakeholders, sentiment arc, objections | ~4K tokens |
-| **Stage 2 — Timeline scaffold** | Ordered event metadata (calls, emails, CRM notes) in chunks | ~10K tokens |
+| **Stage 2 — Timeline scaffold** | Ordered event metadata (calls, emails, CRM notes) in chunks | ~12K tokens |
 | **Stage 3 — Content** | Full transcripts, email bodies, CRM notes — generated concurrently with cached context | ~2K tokens/event |
+| **Stage 3 — Slack** | Internal Slack channels with threaded team conversations anchored to deal events | ~6K tokens |
 
-Stage 3 runs up to 2 events concurrently with an output token rate limiter (10K tokens/min for Haiku) to stay within API limits. The deal context is cached in the system prompt block across all Stage 3 calls, reducing cost on larger deals.
+Stage 3 runs up to 2 events concurrently with an output token rate limiter (10K tokens/min for Haiku) to stay within API limits. The deal context is cached in the system prompt block across all Stage 3 calls, reducing cost on larger deals. Slack generation runs after the timeline is complete and fails gracefully — the deal is saved even if Slack content cannot be produced.
 
 ---
 
@@ -167,7 +179,7 @@ Stage 3 runs up to 2 events concurrently with an output token rate limiter (10K 
 Generated deals are saved as `.ndjson` files in `backend/deals/`. Each file has:
 
 - **Line 1:** deal metadata — company, stakeholders, sentiment arc, stage progression, objections, outcome, CS scenario
-- **Lines 2+:** timeline events (calls, emails, CRM notes, support tickets, support calls) sorted by timestamp
+- **Lines 2+:** timeline events (calls, emails, CRM notes, support tickets, support calls, slack_channel, slack_message) sorted by timestamp
 
 Filename format: `{company_slug}_{deal_id_short}_{timestamp}.ndjson`
 
@@ -246,7 +258,7 @@ mock-deal-generator/
     │   ├── features/
     │   │   ├── ConfigForm/   # Single deal form + bulk/series panels
     │   │   ├── DealList/     # Sidebar + empty state
-    │   │   └── DealView/     # Timeline, sentiment arc, stakeholder grid
+    │   │   └── DealView/     # Timeline, sentiment arc, stakeholder grid, Slack view
     │   ├── components/       # Shared UI components
     │   ├── context/          # DealContext (global state)
     │   └── utils/            # Axios API client
