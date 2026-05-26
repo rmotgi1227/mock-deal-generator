@@ -916,6 +916,9 @@ async def stage_3_generate_slack_content(
 
     slack_events = []
     for channel in channels:
+        if not isinstance(channel, dict):
+            logger.warning("Dropping non-dict Slack channel: %r", channel)
+            continue
         valid_messages = []
         for msg in channel.get("messages", []):
             try:
@@ -983,6 +986,9 @@ async def stage_3_generate_slack_content_series(
 
     slack_events = []
     for channel in channels:
+        if not isinstance(channel, dict):
+            logger.warning("Dropping non-dict Slack channel: %r", channel)
+            continue
         valid_messages = []
         for msg in channel.get("messages", []):
             try:
