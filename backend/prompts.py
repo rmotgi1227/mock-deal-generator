@@ -591,3 +591,148 @@ Each message MUST have channel_id matching its channel.
 
 JSON array of SlackChannel objects: [{{"channel_id": "ch_uuid", "name": "deal-companyname", "topic": "", "is_shared": false, "created_at": "ISO", "messages": [{{"message_id": "msg_uuid", "channel_id": "ch_uuid", "sender": "AE", "sender_name": "Sarah Martinez", "body": "", "timestamp": "ISO", "reactions": [], "is_thread_reply": false, "thread_parent_id": null}}]}}]"""
 
+# ============= STAGE 3: Internal Calls (Event-Driven) =============
+
+def _build_internal_calls_prompt(
+    deal_context: dict,
+    transitions: list = None,
+    rep_context: dict = None
+) -> str:
+    """
+    Build a prompt for generating internal calls based on sentiment transitions detected in buyer calls.
+
+    Args:
+        deal_context: dict with keys: company, ae_name, se_name, deal_size, deal_outcome, all_buyer_calls
+        transitions: list of sentiment transition events, each with:
+            - trigger_call_index: int (index into buyer calls)
+            - prior_sentiment: str (positive|neutral|concerned|negative)
+            - new_sentiment: str (positive|neutral|concerned|negative)
+            - shift_severity: str (minor|moderate|major)
+            - timestamp: str (ISO 8601)
+        rep_context: optional dict with keys: rep_name, quarter_health (for series mode)
+
+    Returns:
+        str: formatted prompt for internal call generation
+    """
+    if transitions is None:
+        transitions = []
+
+    num_calls = len(transitions)
+
+    # Map sentiment to deal_health
+    sentiment_to_health = {
+        'positive': 'on_track',
+        'neutral': 'on_track',
+        'concerned': 'at_risk',
+        'negative': 'stalled'
+    }
+
+    # Map shift_severity to call_type
+    severity_to_calltype = {
+        'minor': 'deal_review',
+        'moderate': 'strategy_session',
+        'major': 'war_room'
+    }
+
+    # Build transition reference section
+    transitions_detail = ""
+    if transitions:
+        transitions_detail = "\nSentiment transitions detected in buyer calls:\n"
+        for i, trans in enumerate(transitions, 1):
+            prior = trans.get('prior_sentiment', 'unknown')
+            new = trans.get('new_sentiment', 'unknown')
+            severity = trans.get('shift_severity', 'unknown')
+            timestamp = trans.get('timestamp', 'unknown')
+            trigger_idx = trans.get('trigger_call_index', i - 1)
+            transitions_detail += (
+                f"{i}. Call #{trigger_idx}: {prior.capitalize()} → {new.capitalize()} "
+                f"(severity: {severity}, at {timestamp})\n"
+            )
+
+    # Build deal outcome guardrail
+    deal_outcome = deal_context.get('deal_outcome', 'unknown')
+    guardrail = ""
+    if deal_outcome == 'closed_won':
+        guardrail = f"\nDeal outcome: {deal_outcome}. If closed_won, internal calls in final 2 weeks should not express stalled/deep concern."
+
+    # Build rep context if provided
+    rep_context_str = ""
+    if rep_context:
+        rep_name = rep_context.get('rep_name', 'Unknown')
+        quarter_health = rep_context.get('quarter_health', 'unknown')
+        rep_context_str = f"\nRep context: Rep {rep_name}, quarter health: {quarter_health}. This context should influence call tone but calls remain deal-focused."
+
+    # Build participant format instruction
+    participant_format = 'Participants should be: {"name": "string", "role": "AE|Manager|SE|SDR"}'
+
+    # Build all call details for context
+    all_buyer_calls = deal_context.get('all_buyer_calls', [])
+    buyer_calls_detail = ""
+    if all_buyer_calls:
+        buyer_calls_detail = "\nBuyer-facing calls (for context):\n"
+        for i, call in enumerate(all_buyer_calls, 1):
+            call_date = call.get('timestamp', 'unknown')
+            call_sentiment = call.get('sentiment', 'unknown')
+            call_title = call.get('title', 'Call')
+            buyer_calls_detail += f"{i}. {call_title} ({call_date}): sentiment={call_sentiment}\n"
+
+    # Build the complete prompt
+    prompt = f"""Generate {num_calls} internal calls, one for each sentiment transition below.
+
+Deal Context:
+- Company: {deal_context.get('company', 'Unknown')}
+- AE: {deal_context.get('ae_name', 'Unknown')}
+- SE: {deal_context.get('se_name', 'Unknown')}
+- Deal Size: {deal_context.get('deal_size', 'Unknown')}
+- Deal Outcome: {deal_outcome}{buyer_calls_detail}{transitions_detail}
+
+Call Type Mapping (based on shift severity):
+- minor shift → deal_review
+- moderate shift → strategy_session
+- major shift → war_room or close_plan_session
+
+Deal Health Mapping (based on new sentiment):
+- positive sentiment → on_track
+- neutral sentiment → on_track
+- concerned sentiment → at_risk
+- negative sentiment → stalled
+
+Participant Format:
+{participant_format}
+
+Dialogue Format:
+Include realistic dialogue with speaker labels using format: Name (Role): dialogue text
+Example: Marcus (AE): We should..."
+Example: Sarah (Manager): Did they mention the timeline issue?"
+
+Requirements:
+1. Generate exactly {num_calls} internal calls
+2. Each call must correspond to one sentiment transition
+3. Call type must match the shift_severity from the transition
+4. Deal health in the call should match the new_sentiment
+5. Include realistic dialogue between team members
+6. Include specific references to the sentiment transitions and why each call is being generated
+7. All participants must be structured JSON format with name and role fields
+8. Calls must reflect the deal context and prior buyer interactions{guardrail}{rep_context_str}
+
+Return a JSON array of internal call objects with this structure:
+[
+  {{
+    "id": "uuid4",
+    "record_type": "internal_call",
+    "timestamp": "ISO 8601",
+    "call_type": "deal_review|strategy_session|war_room|close_plan_session",
+    "deal_health": "on_track|at_risk|stalled",
+    "sentiment": "positive|neutral|concerned|negative",
+    "participants": [
+      {{"name": "string", "role": "AE|Manager|SE|SDR"}}
+    ],
+    "transcript": "Multi-speaker transcript using Name (Role): dialogue format. 300-400 words. Include specific discussion of the sentiment transition and what action the team should take.",
+    "decision": "string (key decision or action plan from this call)"
+  }}
+]
+
+Return only the JSON array, no other text."""
+
+    return prompt
+
