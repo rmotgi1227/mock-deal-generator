@@ -88,7 +88,7 @@ describe('TimelineEvent - Internal Calls', () => {
 
   // Test 19: Border color (purple) - single test
   test('displays internal call card with purple border rgba(168,85,247,0.26)', () => {
-    const { container } = render(
+    render(
       <TimelineEvent
         event={mockInternalCall}
         allEvents={[mockInternalCall]}
@@ -96,18 +96,14 @@ describe('TimelineEvent - Internal Calls', () => {
       />
     )
 
-    // Find the card element by looking for the one that contains the title
-    // The card has the borderColor in its style attribute
-    const allDivs = container.querySelectorAll('div')
-    let cardElement = null
-    for (const div of allDivs) {
-      const style = div.getAttribute('style')
-      if (style && style.includes('rgba(168,85,247,0.26)')) {
-        cardElement = div
-        break
-      }
-    }
+    // Find the card element semantically by locating the title text
+    const titleElement = screen.getByText('Deal Review — Acme Corp')
 
+    // The title is inside a span → div (flex, baseline, gap) → div (flex: 1) → div (flex, align-items: flex-start) → card div
+    // Navigate up 4 levels from the span to reach the card div with the border color
+    const cardElement = titleElement.parentElement?.parentElement?.parentElement?.parentElement
+
+    // Verify the card element exists and has the correct border color
     expect(cardElement).toBeInTheDocument()
     expect(cardElement.getAttribute('style')).toContain('rgba(168,85,247,0.26)')
   })
