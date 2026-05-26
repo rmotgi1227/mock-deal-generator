@@ -27,6 +27,9 @@ from models import (
 from generator import generate_complete_deal, _OutputTokenLimiter, _model_output_tpm
 from file_handler import write_deal, read_deal, list_deal_files, delete_deal, find_deal_file
 from random_config import generate_random_config, series_to_generate_config
+from pool_loader import load_pool, pool_size
+from pool_substitution import substitute_deal
+import random as _random
 
 # Load environment variables from .env
 load_dotenv()
@@ -67,6 +70,14 @@ api = APIRouter(prefix="/api", dependencies=[Depends(require_api_key)])
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
+# Pool-serving mode: when USE_POOL=true, bulk-generate-stream serves pre-generated
+# deals from backend/pool/ with light substitution instead of calling Claude.
+_USE_POOL = os.getenv("USE_POOL", "false").lower() == "true"
+_POOL_PACE_MS = int(os.getenv("POOL_PACE_MS", "200"))
+if _USE_POOL:
+    load_pool()
+    logger.info(f"Pool mode ENABLED. Loaded {pool_size()} deals.")
 
 @api.post("/generate-stream")
 async def generate_deal_stream(request: GenerateRequest):
@@ -290,6 +301,55 @@ async def bulk_generate_stream(request: BulkGenerateRequest):
     count = request.count
     queue: asyncio.Queue = asyncio.Queue()
 
+    async def run_pool_bulk():
+        pool = load_pool()
+        if not pool:
+            await queue.put({"type": "bulk_complete", "total": count, "completed": 0, "failed": count})
+            return
+        overrides = request.overrides or {}
+        completed = 0
+        failed = 0
+        for i in range(count):
+            deal_number = i + 1
+            await queue.put({"type": "deal_start", "deal_number": deal_number, "total": count})
+            try:
+                source = _random.choice(pool)
+                new_deal = substitute_deal(
+                    source,
+                    vendor_company=overrides.get("vendor_company"),
+                    ae_name=overrides.get("ae_name"),
+                    se_name=overrides.get("se_name"),
+                    industry=overrides.get("industry"),
+                    deal_size=overrides.get("deal_size"),
+                    customer_company=overrides.get("company_name"),
+                )
+                filename = await write_deal(
+                    new_deal["metadata"]["deal_id"],
+                    new_deal["metadata"],
+                    new_deal["events"],
+                )
+                completed += 1
+                await queue.put({
+                    "type": "deal_complete",
+                    "deal_number": deal_number,
+                    "total": count,
+                    "completed": completed,
+                    "deal_id": new_deal["metadata"]["deal_id"],
+                    "filename": filename,
+                })
+            except Exception as e:
+                failed += 1
+                logger.error(f"Pool deal {deal_number} failed: {e}")
+                await queue.put({
+                    "type": "deal_error",
+                    "deal_number": deal_number,
+                    "total": count,
+                    "message": str(e),
+                })
+            if _POOL_PACE_MS > 0:
+                await asyncio.sleep(_POOL_PACE_MS / 1000.0)
+        await queue.put({"type": "bulk_complete", "total": count, "completed": completed, "failed": failed})
+
     async def run_bulk():
         shared_limiter = _OutputTokenLimiter(_model_output_tpm())
         sem = asyncio.Semaphore(2)
@@ -328,7 +388,10 @@ async def bulk_generate_stream(request: BulkGenerateRequest):
         await asyncio.gather(*[generate_one(i + 1) for i in range(count)])
         await queue.put({"type": "bulk_complete", "total": count, "completed": completed[0], "failed": failed[0]})
 
-    asyncio.create_task(run_bulk())
+    if _USE_POOL and pool_size() > 0:
+        asyncio.create_task(run_pool_bulk())
+    else:
+        asyncio.create_task(run_bulk())
 
     async def event_stream():
         while True:
@@ -346,6 +409,16 @@ async def bulk_generate_stream(request: BulkGenerateRequest):
             "Connection": "keep-alive",
         }
     )
+
+
+@api.get("/pool/status")
+async def pool_status():
+    """Diagnostic: is pool mode on, and how many deals are loaded?"""
+    return {
+        "use_pool": _USE_POOL,
+        "pool_size": pool_size(),
+        "pool_pace_ms": _POOL_PACE_MS,
+    }
 
 
 app.include_router(api)
