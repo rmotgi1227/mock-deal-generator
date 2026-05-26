@@ -730,16 +730,18 @@ Return a JSON array of internal call objects with this structure:
 [
   {{
     "id": "uuid4",
-    "record_type": "internal_call",
-    "timestamp": "ISO 8601",
+    "title": "string (e.g., 'Deal Review — Company Name')",
     "call_type": "deal_review|strategy_session|war_room|close_plan_session",
+    "date": "YYYY-MM-DD (extracted from timestamp)",
+    "timestamp": "ISO 8601",
+    "stage": "Prospecting|Discovery|Demo|Evaluation|Negotiation|Closed",
     "deal_health": "on_track|at_risk|stalled",
-    "sentiment": "positive|neutral|concerned|negative",
     "participants": [
       {{"name": "string", "role": "AE|Manager|SE|SDR"}}
     ],
-    "transcript": "Multi-speaker transcript using Name (Role): dialogue format. 300-400 words. Include specific discussion of the sentiment transition and what action the team should take.",
-    "decision": "string (key decision or action plan from this call)"
+    "transcript": "Multi-speaker transcript using Name (Role): dialogue format. 400-600 words. Include specific discussion of the sentiment transition and what action the team should take.",
+    "summary": "1-2 sentences summarizing the call outcome and next steps",
+    "action_items": ["concrete outcome 1", "concrete outcome 2", "concrete outcome 3"]
   }}
 ]
 
