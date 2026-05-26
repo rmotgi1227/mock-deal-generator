@@ -179,6 +179,26 @@ async def test_sentiment_transition_severity_major():
     assert transitions[0]["shift_severity"] == "major"
 
 
+@pytest.mark.asyncio
+async def test_sentiment_transition_severity_positive_negative_major():
+    """A direct positive<->negative swing is the most extreme shift and must be major."""
+    base = {"record_type": "call", "stage": "negotiation"}
+    # positive -> negative
+    down = _detect_sentiment_transitions([
+        {**base, "id": "c1", "timestamp": "2024-03-01T10:00:00Z", "sentiment": "positive"},
+        {**base, "id": "c2", "timestamp": "2024-03-08T10:00:00Z", "sentiment": "negative"},
+    ])
+    assert len(down) == 1
+    assert down[0]["shift_severity"] == "major"
+    # negative -> positive (symmetric)
+    up = _detect_sentiment_transitions([
+        {**base, "id": "c1", "timestamp": "2024-03-01T10:00:00Z", "sentiment": "negative"},
+        {**base, "id": "c2", "timestamp": "2024-03-08T10:00:00Z", "sentiment": "positive"},
+    ])
+    assert len(up) == 1
+    assert up[0]["shift_severity"] == "major"
+
+
 # ============= Test 1c: Call type matches transition severity =============
 
 @pytest.mark.asyncio
