@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import TimelineEvent from '../../components/TimelineEvent'
 import SlackView from './SlackView'
 
@@ -45,8 +45,8 @@ const TabBar = ({ activeTab, setActiveTab, hasCS, hasSlack }) => {
       border: '1px solid var(--rule)',
     }}>
       {tab('sales', 'Sales Timeline')}
-      {tab('cs', 'CS Timeline')}
-      {tab('slack', 'Slack')}
+      {hasCS && tab('cs', 'CS Timeline')}
+      {hasSlack && tab('slack', 'Slack')}
     </div>
   )
 }
@@ -182,6 +182,10 @@ const DealTimeline = ({ deal }) => {
 
   const hasCS = csEvents.length > 0
   const hasSlack = slackEvents.length > 0
+
+  useEffect(() => {
+    setActiveTab('sales')
+  }, [deal?.metadata?.deal_id])
 
   return (
     <div>
