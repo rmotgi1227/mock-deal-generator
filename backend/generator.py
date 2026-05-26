@@ -1158,9 +1158,6 @@ async def stage_3_generate_internal_calls(
     except json.JSONDecodeError as e:
         logger.warning("Invalid JSON from internal call generation: %s", e)
         return []
-    except ValidationError as e:
-        logger.error("Invalid internal call structure: %s", e)
-        return []
     except Exception as e:
         logger.error("Internal call generation failed: %s", e)
         return []
@@ -1268,9 +1265,6 @@ async def stage_3_generate_internal_calls_series(
 
     except json.JSONDecodeError as e:
         logger.warning("Invalid JSON from internal call generation: %s", e)
-        return []
-    except ValidationError as e:
-        logger.error("Invalid internal call structure: %s", e)
         return []
     except Exception as e:
         logger.error("Internal call generation failed: %s", e)
@@ -1537,7 +1531,7 @@ async def generate_complete_deal(
                 token_tracker=token_tracker
             )
         events.extend(internal_call_events)
-        events.sort(key=lambda e: e.get("timestamp", ""))
+        events.sort(key=lambda e: _parse_sort_ts(e.get("timestamp", "")))
         if progress_callback:
             await progress_callback("internal_calls_generated", "Internal calls generated", 97)
     except Exception as err:
