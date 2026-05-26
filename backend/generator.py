@@ -37,6 +37,7 @@ from prompts import (
     STAGE_3_SUPPORT_CALL_PROMPT_TEMPLATE,
     STAGE_3_SLACK_PROMPT_TEMPLATE,
     STAGE_3_SLACK_SERIES_PROMPT_TEMPLATE,
+    _build_internal_calls_prompt,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,7 @@ MAX_TOKENS_BY_TYPE = {
     "email": 800,      # Reduced from 1024 (actual ~700, 21.9% reduction)
     "crm_note": 350,   # Reduced from 400 (actual ~300, 12.5% reduction)
     "stage3_slack": 6000,  # Conversational Slack messages need more tokens
+    "stage3_internal_calls": 2500,  # Internal call generation with sentiment transitions
 }
 
 # Tier-1 output tokens per minute by model family
@@ -1008,6 +1010,273 @@ async def stage_3_generate_slack_content_series(
     return slack_events
 
 
+def _detect_sentiment_transitions(calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Extract sentiment shifts from buyer-facing call timeline.
+
+    Args:
+        calls: List of buyer-facing call events (sorted by timestamp)
+
+    Returns:
+        List of transition dicts with keys: trigger_call_index, prior_sentiment,
+        new_sentiment, shift_severity, timestamp
+    """
+    if len(calls) < 2:
+        return []
+
+    transitions = []
+
+    for i in range(1, len(calls)):
+        curr_call = calls[i]
+        prior_call = calls[i - 1]
+
+        # Skip if sentiment field missing
+        curr_sentiment = curr_call.get("sentiment", "").lower()
+        prior_sentiment = prior_call.get("sentiment", "").lower()
+
+        if not curr_sentiment or not prior_sentiment:
+            continue
+
+        # Skip if no change
+        if curr_sentiment == prior_sentiment:
+            continue
+
+        # Determine shift severity
+        severity = "moderate"  # Default
+
+        # Minor shifts: positive<->concerned, or any neutral
+        if "neutral" in (curr_sentiment, prior_sentiment):
+            severity = "minor"
+        elif {curr_sentiment, prior_sentiment} == {"positive", "concerned"}:
+            severity = "minor"
+        # Major shifts: concerned<->negative
+        elif {curr_sentiment, prior_sentiment} == {"concerned", "negative"}:
+            severity = "major"
+
+        transition = {
+            "trigger_call_index": i,
+            "prior_sentiment": prior_sentiment,
+            "new_sentiment": curr_sentiment,
+            "shift_severity": severity,
+            "timestamp": curr_call.get("timestamp", ""),
+            "stage": curr_call.get("stage", "Unknown"),
+        }
+        transitions.append(transition)
+
+    return transitions
+
+
+async def stage_3_generate_internal_calls(
+    deal_id: str,
+    deal_data: Dict,
+    max_tokens: int = None,
+    limiter: Optional[_OutputTokenLimiter] = None,
+    token_tracker: Optional['TokenTracker'] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Generate internal calls triggered by sentiment transitions in single deal mode.
+
+    Args:
+        deal_id: str
+        deal_data: dict (complete deal object with events, metadata, config)
+        max_tokens: int
+        limiter: output_token_limiter instance
+        token_tracker: token tracking dict
+
+    Returns:
+        List of internal call event dicts with record_type="internal_call"
+    """
+    from models import InternalCallEvent
+
+    if max_tokens is None:
+        max_tokens = MAX_TOKENS_BY_TYPE["stage3_internal_calls"]
+
+    # Extract buyer-facing calls (filter by record_type not starting with 'support' or 'slack')
+    events = deal_data.get("timeline_events", deal_data.get("events", []))
+    buyer_calls = [
+        e for e in events
+        if e.get("record_type") == "call"  # Only buyer-facing calls
+    ]
+
+    # Detect sentiment transitions
+    transitions = _detect_sentiment_transitions(buyer_calls)
+
+    if not transitions:
+        return []
+
+    # Extract metadata
+    metadata = deal_data.get("metadata", {})
+    company = metadata.get("company", {})
+    ae_name = metadata.get("sales_rep", {}).get("name", "AE")
+    se_name = metadata.get("sales_engineer", {}).get("name", "SE") if metadata.get("sales_engineer") else "SE"
+
+    # Build internal call context
+    deal_context = {
+        "company": company.get("name", "Unknown Company"),
+        "ae_name": ae_name,
+        "se_name": se_name,
+        "deal_size": metadata.get("config", {}).get("deal_size", "Unknown"),
+        "deal_outcome": metadata.get("deal_outcome", "unknown"),
+        "all_buyer_calls": buyer_calls,
+    }
+
+    # Build prompt
+    prompt = _build_internal_calls_prompt(deal_context, transitions=transitions, rep_context=None)
+
+    # Call Claude API
+    try:
+        text = await call_claude(
+            prompt,
+            max_tokens,
+            limiter=limiter,
+            stage="stage3_internal_calls",
+            token_tracker=token_tracker
+        )
+        internal_calls_data = json.loads(text)
+
+        # Ensure it's a list
+        if not isinstance(internal_calls_data, list):
+            internal_calls_data = [internal_calls_data]
+
+        # Validate and build event dicts
+        internal_call_events = []
+        for call in internal_calls_data:
+            try:
+                # Validate against InternalCallEvent model
+                InternalCallEvent(**call)
+
+                # Build event dict with record_type
+                event = call.copy()
+                event["record_type"] = "internal_call"
+                internal_call_events.append(event)
+            except ValidationError as e:
+                logger.warning("Invalid internal call structure, skipping: %s", e)
+                continue
+
+        return internal_call_events
+
+    except json.JSONDecodeError as e:
+        logger.warning("Invalid JSON from internal call generation: %s", e)
+        return []
+    except ValidationError as e:
+        logger.error("Invalid internal call structure: %s", e)
+        return []
+    except Exception as e:
+        logger.error("Internal call generation failed: %s", e)
+        return []
+
+
+async def stage_3_generate_internal_calls_series(
+    deal_id: str,
+    deal_data: Dict,
+    rep_name: str,
+    max_tokens: int = None,
+    limiter: Optional[_OutputTokenLimiter] = None,
+    token_tracker: Optional['TokenTracker'] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Generate internal calls in series mode with rep-level context.
+
+    Args:
+        deal_id: str
+        deal_data: dict (complete deal object with events, metadata, config)
+        rep_name: str (sales rep name)
+        max_tokens: int
+        limiter: output_token_limiter instance
+        token_tracker: token tracking dict
+
+    Returns:
+        List of internal call event dicts with record_type="internal_call"
+    """
+    from models import InternalCallEvent
+
+    if max_tokens is None:
+        max_tokens = MAX_TOKENS_BY_TYPE["stage3_internal_calls"]
+
+    # Extract buyer-facing calls
+    events = deal_data.get("timeline_events", deal_data.get("events", []))
+    buyer_calls = [
+        e for e in events
+        if e.get("record_type") == "call"
+    ]
+
+    # Detect sentiment transitions
+    transitions = _detect_sentiment_transitions(buyer_calls)
+
+    if not transitions:
+        return []
+
+    # Extract metadata
+    metadata = deal_data.get("metadata", {})
+    company = metadata.get("company", {})
+    ae_name = metadata.get("sales_rep", {}).get("name", "AE")
+    se_name = metadata.get("sales_engineer", {}).get("name", "SE") if metadata.get("sales_engineer") else "SE"
+
+    # Derive quarter health
+    quarter_health = _slack_quarter_health(deal_data)
+
+    # Build internal call context
+    deal_context = {
+        "company": company.get("name", "Unknown Company"),
+        "ae_name": ae_name,
+        "se_name": se_name,
+        "deal_size": metadata.get("config", {}).get("deal_size", "Unknown"),
+        "deal_outcome": metadata.get("deal_outcome", "unknown"),
+        "all_buyer_calls": buyer_calls,
+    }
+
+    # Build rep context
+    rep_context = {
+        "rep_name": rep_name,
+        "quarter_health": quarter_health,
+    }
+
+    # Build prompt
+    prompt = _build_internal_calls_prompt(deal_context, transitions=transitions, rep_context=rep_context)
+
+    # Call Claude API
+    try:
+        text = await call_claude(
+            prompt,
+            max_tokens,
+            limiter=limiter,
+            stage="stage3_internal_calls_series",
+            token_tracker=token_tracker
+        )
+        internal_calls_data = json.loads(text)
+
+        # Ensure it's a list
+        if not isinstance(internal_calls_data, list):
+            internal_calls_data = [internal_calls_data]
+
+        # Validate and build event dicts
+        internal_call_events = []
+        for call in internal_calls_data:
+            try:
+                # Validate against InternalCallEvent model
+                InternalCallEvent(**call)
+
+                # Build event dict with record_type
+                event = call.copy()
+                event["record_type"] = "internal_call"
+                internal_call_events.append(event)
+            except ValidationError as e:
+                logger.warning("Invalid internal call structure, skipping: %s", e)
+                continue
+
+        return internal_call_events
+
+    except json.JSONDecodeError as e:
+        logger.warning("Invalid JSON from internal call generation: %s", e)
+        return []
+    except ValidationError as e:
+        logger.error("Invalid internal call structure: %s", e)
+        return []
+    except Exception as e:
+        logger.error("Internal call generation failed: %s", e)
+        return []
+
+
 def _parse_sort_ts(ts: str) -> datetime:
     """Parse and normalize timestamp to UTC naive datetime for consistent sorting."""
     try:
@@ -1248,8 +1517,34 @@ async def generate_complete_deal(
         if progress_callback:
             await progress_callback("slack_failed", "Slack generation failed, continuing without Slack", 95)
 
+    # Generate internal calls (Stage 3.6) - triggered by sentiment transitions
+    try:
+        if config.get("is_series", False):
+            internal_call_events = await stage_3_generate_internal_calls_series(
+                deal_id=deal_id,
+                deal_data=deal_data,
+                rep_name=stage1["sales_rep"]["name"],
+                max_tokens=MAX_TOKENS_BY_TYPE.get("stage3_internal_calls", 2500),
+                limiter=output_token_limiter,
+                token_tracker=token_tracker
+            )
+        else:
+            internal_call_events = await stage_3_generate_internal_calls(
+                deal_id=deal_id,
+                deal_data=deal_data,
+                max_tokens=MAX_TOKENS_BY_TYPE.get("stage3_internal_calls", 2500),
+                limiter=output_token_limiter,
+                token_tracker=token_tracker
+            )
+        events.extend(internal_call_events)
+        events.sort(key=lambda e: e.get("timestamp", ""))
+        if progress_callback:
+            await progress_callback("internal_calls_generated", "Internal calls generated", 97)
+    except Exception as err:
+        logger.error("Internal call generation failed: %s", err)
+
     if progress_callback:
-        await progress_callback("saving", "Saving deal...", 96)
+        await progress_callback("saving", "Saving deal...", 98)
 
     generated_at = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
 
