@@ -198,6 +198,16 @@ def substitute_deal(
         md["config"]["industry"] = industry
     if deal_size:
         md["config"]["deal_size"] = deal_size
+
+    # Backfill required Company fields Claude sometimes omits. Without this
+    # the GET /api/deals/{id} response 500s on Pydantic validation, which
+    # breaks Ycrest's harvester.
+    company = md["company"]
+    company.setdefault("employee_count", "200-500")
+    company.setdefault("arr_range", "$5M-$15M ARR")
+    company.setdefault("tech_stack", ["Salesforce", "Slack", "AWS"])
+    company.setdefault("icp_type", f"Mid-market {company.get('industry', 'SaaS')}")
+    company.setdefault("hq_location", "San Francisco, CA")
     for sh, (_, new_sh_name, _, new_sh_email) in zip(
         md.get("stakeholders", []) or [], stakeholder_remap
     ):
