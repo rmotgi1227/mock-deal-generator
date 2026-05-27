@@ -9,7 +9,7 @@ import random
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 # Generic fictional customer company names by rough industry flavor.
 # When `customer_company` override is not provided, one is picked at random.
